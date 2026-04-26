@@ -1,0 +1,2028 @@
+-- SKIN CHANGER (ФИНАЛЬНАЯ ПРОСТАЯ ВЕРСИЯ БЕЗ БАГОВ)
+
+local Players = game:GetService("Players")
+local CoreGui = game:GetService("CoreGui")
+local TweenService = game:GetService("TweenService")
+local UserInputService = game:GetService("UserInputService")
+local RunService = game:GetService("RunService")
+
+local player = Players.LocalPlayer
+local character = player.Character or player.CharacterAdded:Wait()
+local humanoid = character:WaitForChild("Humanoid")
+local head = character:WaitForChild("Head")
+
+-- Сохраняем оригинальный персонаж один раз при запуске
+local originalPlayerCharacter = nil
+
+task.spawn(function()
+    -- Ждём загрузки персонажа
+    local char = player.Character or player.CharacterAdded:Wait()
+
+    -- Небольшая задержка для загрузки аксессуаров
+    task.wait(3)
+
+    if char then
+        originalPlayerCharacter = char:Clone()
+
+        local accessories = {}
+        for _, item in ipairs(char:GetChildren()) do
+            if item:IsA("Accessory") then
+                table.insert(accessories, item)
+            end
+        end
+
+
+        -- Показываем список аксессуаров
+        if #accessories > 0 then
+            for _, acc in ipairs(accessories) do
+            end
+        else
+        end
+    end
+end)
+
+-- Переменная для сохранения выбранного игрока
+local lastAppliedPlayer = nil
+local savedSkinData = nil -- Сохранённые данные скина
+local savedSkins = {} -- Список всех сохранённых скинов
+
+-- Функции для сохранения/загрузки (работают только в эксплойтах)
+local function saveSavedSkinsToFile()
+    if not writefile then
+        return
+    end
+
+
+    local dataToSave = {}
+    for i, skinData in ipairs(savedSkins) do
+        -- Конвертируем Body Colors в сериализуемый формат
+        local bodyColorsData = nil
+        if skinData.bodyColors then
+            bodyColorsData = {
+                HeadColor3 = {skinData.bodyColors.HeadColor3.R, skinData.bodyColors.HeadColor3.G, skinData.bodyColors.HeadColor3.B},
+                LeftArmColor3 = {skinData.bodyColors.LeftArmColor3.R, skinData.bodyColors.LeftArmColor3.G, skinData.bodyColors.LeftArmColor3.B},
+                LeftLegColor3 = {skinData.bodyColors.LeftLegColor3.R, skinData.bodyColors.LeftLegColor3.G, skinData.bodyColors.LeftLegColor3.B},
+                RightArmColor3 = {skinData.bodyColors.RightArmColor3.R, skinData.bodyColors.RightArmColor3.G, skinData.bodyColors.RightArmColor3.B},
+                RightLegColor3 = {skinData.bodyColors.RightLegColor3.R, skinData.bodyColors.RightLegColor3.G, skinData.bodyColors.RightLegColor3.B},
+                TorsoColor3 = {skinData.bodyColors.TorsoColor3.R, skinData.bodyColors.TorsoColor3.G, skinData.bodyColors.TorsoColor3.B}
+            }
+        end
+
+        -- Сохраняем размеры тела
+        local bodyScales = nil
+        if skinData.bodyScales then
+            bodyScales = skinData.bodyScales
+        end
+
+        -- Сохраняем размеры частей тела
+        local bodyPartSizes = nil
+        if skinData.bodyPartSizes then
+            bodyPartSizes = skinData.bodyPartSizes
+        end
+
+        -- Сохраняем меши частей тела
+        local bodyPartMeshes = nil
+        if skinData.bodyPartMeshes then
+            bodyPartMeshes = skinData.bodyPartMeshes
+        end
+
+        table.insert(dataToSave, {
+            playerName = skinData.playerName,
+            userId = skinData.userId,
+            clothes = {},
+            bodyColors = bodyColorsData,
+            bodyScales = bodyScales,
+            bodyPartSizes = bodyPartSizes,
+            bodyPartMeshes = bodyPartMeshes,
+            face = skinData.face,
+            headMesh = nil,
+            characterMeshes = {},
+            accessories = {}
+        })
+
+        local lastSkin = dataToSave[#dataToSave]
+
+        -- Сохраняем headMesh
+        if skinData.headMesh then
+            if type(skinData.headMesh) == "userdata" then
+                lastSkin.headMesh = {
+                    ClassName = skinData.headMesh.ClassName,
+                    MeshId = skinData.headMesh.MeshId,
+                    TextureId = skinData.headMesh.TextureId,
+                    Scale = {skinData.headMesh.Scale.X, skinData.headMesh.Scale.Y, skinData.headMesh.Scale.Z}
+                }
+            end
+        end
+
+        -- Сохраняем одежду
+        for _, cloth in ipairs(skinData.clothes) do
+            if type(cloth) == "userdata" then
+                local textureId = ""
+                if cloth.ClassName == "ShirtGraphic" then
+                    textureId = cloth.Graphic
+                else
+                    textureId = cloth[cloth.ClassName .. "Template"]
+                end
+                table.insert(lastSkin.clothes, {
+                    ClassName = cloth.ClassName,
+                    TextureId = textureId
+                })
+            end
+        end
+
+        -- Сохраняем CharacterMesh
+        for _, mesh in ipairs(skinData.characterMeshes) do
+            if type(mesh) == "userdata" then
+                -- Извлекаем только имя части тела без "Enum.BodyPart."
+                local bodyPartName = tostring(mesh.BodyPart):match("%.(%w+)$") or tostring(mesh.BodyPart)
+                table.insert(lastSkin.characterMeshes, {
+                    BodyPart = bodyPartName,
+                    MeshId = tostring(mesh.MeshId),
+                    OverlayTextureId = tostring(mesh.OverlayTextureId)
+                })
+            end
+        end
+
+        -- Сохраняем аксессуары
+        local convertedAccessories = {}
+        for _, accData in ipairs(skinData.accessories) do
+            if type(accData) == "userdata" and accData.ClassName == "Accessory" then
+                local handle = accData:FindFirstChild("Handle", true)
+                if handle and handle:IsA("BasePart") then
+                    local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                    local att = handle:FindFirstChildOfClass("Attachment")
+
+                    local meshId = ""
+                    local textureId = ""
+                    local meshScale = {1, 1, 1}
+
+                    -- Проверяем тип Handle: MeshPart или Part с SpecialMesh
+                    if handle:IsA("MeshPart") then
+                        meshId = handle.MeshId
+                        textureId = handle.TextureID
+                        -- Для MeshPart используем стандартный масштаб, размер контролируется HandleSize
+                        meshScale = {1, 1, 1}
+                    elseif mesh then
+                        meshId = mesh.MeshId
+                        textureId = mesh.TextureId
+                        meshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
+                    end
+
+                    local accDataConverted = {
+                        Name = accData.Name,
+                        MeshId = meshId,
+                        TextureId = textureId,
+                        MeshScale = meshScale,
+                        AttachmentName = att and att.Name or "",
+                        AttachmentCFrame = {},
+                        HandleSize = {handle.Size.X, handle.Size.Y, handle.Size.Z},
+                        HandleTransparency = handle.Transparency,
+                        HandleMaterial = tostring(handle.Material),
+                        IsMeshPart = handle:IsA("MeshPart")
+                    }
+
+                    if att then
+                        local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = att.CFrame:GetComponents()
+                        accDataConverted.AttachmentCFrame = {x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22}
+                    end
+
+                    table.insert(lastSkin.accessories, accDataConverted)
+                    table.insert(convertedAccessories, accDataConverted)
+                end
+            elseif type(accData) == "table" then
+                -- Уже таблица, просто копируем
+                table.insert(lastSkin.accessories, accData)
+                table.insert(convertedAccessories, accData)
+            end
+        end
+
+        -- ВАЖНО: Обновляем аксессуары в памяти на формат таблиц
+        savedSkins[i].accessories = convertedAccessories
+    end
+
+
+    local success, err = pcall(function()
+        local HttpService = game:GetService("HttpService")
+        local json = HttpService:JSONEncode(dataToSave)
+        writefile("SkinChanger_SavedSkins.json", json)
+
+        -- Верификация: читаем файл обратно
+        if readfile and isfile and isfile("SkinChanger_SavedSkins.json") then
+            local verifyJson = readfile("SkinChanger_SavedSkins.json")
+            local verifyData = HttpService:JSONDecode(verifyJson)
+            if #verifyData ~= #dataToSave then
+            end
+        end
+    end)
+
+    if not success then
+    end
+end
+
+local function loadSavedSkinsFromFile()
+    if not readfile or not isfile then
+        return
+    end
+
+    if not isfile("SkinChanger_SavedSkins.json") then
+        return
+    end
+
+
+    local success, err = pcall(function()
+        local HttpService = game:GetService("HttpService")
+        local json = readfile("SkinChanger_SavedSkins.json")
+        local dataLoaded = HttpService:JSONDecode(json)
+
+        for i, skinData in ipairs(dataLoaded) do
+            -- Восстанавливаем Body Colors из массивов RGB
+            local bodyColorsRestored = nil
+            if skinData.bodyColors then
+                bodyColorsRestored = {
+                    HeadColor3 = Color3.new(unpack(skinData.bodyColors.HeadColor3)),
+                    LeftArmColor3 = Color3.new(unpack(skinData.bodyColors.LeftArmColor3)),
+                    LeftLegColor3 = Color3.new(unpack(skinData.bodyColors.LeftLegColor3)),
+                    RightArmColor3 = Color3.new(unpack(skinData.bodyColors.RightArmColor3)),
+                    RightLegColor3 = Color3.new(unpack(skinData.bodyColors.RightLegColor3)),
+                    TorsoColor3 = Color3.new(unpack(skinData.bodyColors.TorsoColor3))
+                }
+            end
+
+            -- Восстанавливаем размеры тела
+            local bodyScalesRestored = nil
+            if skinData.bodyScales then
+                bodyScalesRestored = skinData.bodyScales
+            end
+
+            -- Восстанавливаем размеры частей тела
+            local bodyPartSizesRestored = nil
+            if skinData.bodyPartSizes then
+                bodyPartSizesRestored = skinData.bodyPartSizes
+            end
+
+            -- Восстанавливаем меши частей тела
+            local bodyPartMeshesRestored = nil
+            if skinData.bodyPartMeshes then
+                bodyPartMeshesRestored = skinData.bodyPartMeshes
+            end
+
+            local newSkin = {
+                playerName = skinData.playerName,
+                userId = skinData.userId,
+                clothes = {},
+                bodyColors = bodyColorsRestored,
+                bodyScales = bodyScalesRestored,
+                bodyPartSizes = bodyPartSizesRestored,
+                bodyPartMeshes = bodyPartMeshesRestored,
+                face = skinData.face,
+                headMesh = nil,
+                characterMeshes = {},
+                accessories = {}
+            }
+
+            -- Восстанавливаем Head Mesh
+            if skinData.headMesh then
+                local mesh = Instance.new(skinData.headMesh.ClassName)
+                mesh.MeshId = skinData.headMesh.MeshId
+                mesh.TextureId = skinData.headMesh.TextureId
+                if skinData.headMesh.Scale then
+                    mesh.Scale = Vector3.new(unpack(skinData.headMesh.Scale))
+                end
+                newSkin.headMesh = mesh
+            end
+
+            -- Восстанавливаем одежду
+            for _, clothData in ipairs(skinData.clothes) do
+                local cloth = Instance.new(clothData.ClassName)
+                if clothData.ClassName == "ShirtGraphic" then
+                    cloth.Graphic = clothData.TextureId
+                else
+                    cloth[clothData.ClassName .. "Template"] = clothData.TextureId
+                end
+                table.insert(newSkin.clothes, cloth)
+            end
+
+            -- Восстанавливаем CharacterMesh
+            for _, meshData in ipairs(skinData.characterMeshes) do
+                local success, err = pcall(function()
+                    local m = Instance.new("CharacterMesh")
+                    -- Безопасное преобразование BodyPart
+                    local bodyPartMap = {
+                        ["Torso"] = Enum.BodyPart.Torso,
+                        ["LeftArm"] = Enum.BodyPart.LeftArm,
+                        ["RightArm"] = Enum.BodyPart.RightArm,
+                        ["LeftLeg"] = Enum.BodyPart.LeftLeg,
+                        ["RightLeg"] = Enum.BodyPart.RightLeg,
+                        ["Head"] = Enum.BodyPart.Head
+                    }
+                    if bodyPartMap[meshData.BodyPart] then
+                        m.BodyPart = bodyPartMap[meshData.BodyPart]
+                        -- MeshId может быть числом или строкой с rbxassetid://
+                        if type(meshData.MeshId) == "number" then
+                            m.MeshId = "rbxassetid://" .. meshData.MeshId
+                        else
+                            m.MeshId = meshData.MeshId
+                        end
+                        m.OverlayTextureId = meshData.OverlayTextureId or ""
+                        table.insert(newSkin.characterMeshes, m)
+                    else
+                    end
+                end)
+                if not success then
+                end
+            end
+
+            -- Восстанавливаем аксессуары (сохраняем как таблицы данных)
+            for j, accData in ipairs(skinData.accessories) do
+                table.insert(newSkin.accessories, accData)
+            end
+
+            table.insert(savedSkins, newSkin)
+        end
+
+    end)
+
+    if not success then
+    else
+    end
+end
+
+-- Загружаем сохранённые скины при запуске
+loadSavedSkinsFromFile()
+
+
+-- Удаление старого GUI если существует
+if CoreGui:FindFirstChild("SkinChangerGui") then
+    CoreGui:FindFirstChild("SkinChangerGui"):Destroy()
+end
+
+-- Создание GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "SkinChangerGui"
+screenGui.ResetOnSpawn = false
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = CoreGui
+
+-- Иконка на экране (следует за головой)
+local headIcon = Instance.new("Frame")
+headIcon.Name = "HeadIcon"
+headIcon.Size = UDim2.new(0, 40, 0, 40)
+headIcon.Position = UDim2.new(0.5, -20, 0.5, -20)
+headIcon.BackgroundColor3 = Color3.fromRGB(20, 20, 20)
+headIcon.BackgroundTransparency = 0.2
+headIcon.BorderSizePixel = 0
+headIcon.Visible = false
+headIcon.Parent = screenGui
+
+local iconCorner = Instance.new("UICorner")
+iconCorner.CornerRadius = UDim.new(1, 0)
+iconCorner.Parent = headIcon
+
+local avatarImage = Instance.new("ImageLabel")
+avatarImage.Size = UDim2.new(0.9, 0, 0.9, 0)
+avatarImage.Position = UDim2.new(0.05, 0, 0.05, 0)
+avatarImage.BackgroundTransparency = 1
+avatarImage.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+avatarImage.Parent = headIcon
+
+local avatarCorner = Instance.new("UICorner")
+avatarCorner.CornerRadius = UDim.new(1, 0)
+avatarCorner.Parent = avatarImage
+
+local iconButton = Instance.new("TextButton")
+iconButton.Size = UDim2.new(1, 0, 1, 0)
+iconButton.BackgroundTransparency = 1
+iconButton.Text = ""
+iconButton.ZIndex = 10
+iconButton.Parent = headIcon
+
+-- Обновление позиции иконки над головой
+local function updateIconPosition()
+    if not headIcon.Visible then return end
+    if not character or not character:FindFirstChild("Head") then return end
+
+    local camera = workspace.CurrentCamera
+    local headPosition = character.Head.Position
+    -- Фиксированная позиция над головой (выше чтобы не было в голове при отдалении)
+    local iconWorldPos = headPosition + Vector3.new(0, 4.5, 0)
+    local screenPos, onScreen = camera:WorldToViewportPoint(iconWorldPos)
+
+    if onScreen then
+        headIcon.Position = UDim2.new(0, screenPos.X - 20, 0, screenPos.Y - 20)
+    end
+end
+
+RunService.RenderStepped:Connect(updateIconPosition)
+
+-- Большое меню с 3D моделями
+local skinMenu = Instance.new("Frame")
+skinMenu.Name = "SkinMenu"
+skinMenu.Size = UDim2.new(0, 600, 0, 400)
+skinMenu.Position = UDim2.new(0.5, -300, 0.5, -200)
+skinMenu.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+skinMenu.BackgroundTransparency = 0.1
+skinMenu.BorderSizePixel = 0
+skinMenu.Visible = false
+skinMenu.Parent = screenGui
+
+local menuCorner = Instance.new("UICorner")
+menuCorner.CornerRadius = UDim.new(0, 15)
+menuCorner.Parent = skinMenu
+
+-- Заголовок меню
+local menuTitle = Instance.new("TextLabel")
+menuTitle.Size = UDim2.new(0.5, -40, 0, 40)
+menuTitle.Position = UDim2.new(0, 0, 0, 0)
+menuTitle.BackgroundTransparency = 1
+menuTitle.Text = "SKIN CHANGER"
+menuTitle.TextColor3 = Color3.fromRGB(200, 200, 210)
+menuTitle.Font = Enum.Font.GothamBold
+menuTitle.TextSize = 18
+menuTitle.Parent = skinMenu
+
+-- Кнопка "Saved Skins"
+local savedSkinsButton = Instance.new("TextButton")
+savedSkinsButton.Size = UDim2.new(0, 120, 0, 30)
+savedSkinsButton.Position = UDim2.new(0.5, -60, 0, 5)
+savedSkinsButton.BackgroundColor3 = Color3.fromRGB(50, 120, 200)
+savedSkinsButton.BackgroundTransparency = 0.3
+savedSkinsButton.Text = "SAVED SKINS"
+savedSkinsButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+savedSkinsButton.Font = Enum.Font.GothamBold
+savedSkinsButton.TextSize = 12
+savedSkinsButton.Parent = skinMenu
+
+local savedSkinsCorner = Instance.new("UICorner")
+savedSkinsCorner.CornerRadius = UDim.new(0, 8)
+savedSkinsCorner.Parent = savedSkinsButton
+
+-- Кнопка закрытия
+local closeButton = Instance.new("TextButton")
+closeButton.Size = UDim2.new(0, 30, 0, 30)
+closeButton.Position = UDim2.new(1, -35, 0, 5)
+closeButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+closeButton.BackgroundTransparency = 0.3
+closeButton.Text = "X"
+closeButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+closeButton.Font = Enum.Font.GothamBold
+closeButton.TextSize = 16
+closeButton.Parent = skinMenu
+
+local closeCorner = Instance.new("UICorner")
+closeCorner.CornerRadius = UDim.new(0, 8)
+closeCorner.Parent = closeButton
+
+-- Меню сохранённых скинов
+local savedSkinsMenu = Instance.new("Frame")
+savedSkinsMenu.Name = "SavedSkinsMenu"
+savedSkinsMenu.Size = UDim2.new(0, 600, 0, 400)
+savedSkinsMenu.Position = UDim2.new(0.5, -300, 0.5, -200)
+savedSkinsMenu.BackgroundColor3 = Color3.fromRGB(18, 18, 22)
+savedSkinsMenu.BackgroundTransparency = 0.1
+savedSkinsMenu.BorderSizePixel = 0
+savedSkinsMenu.Visible = false
+savedSkinsMenu.Parent = screenGui
+
+local savedMenuCorner = Instance.new("UICorner")
+savedMenuCorner.CornerRadius = UDim.new(0, 15)
+savedMenuCorner.Parent = savedSkinsMenu
+
+-- Заголовок меню сохранённых скинов
+local savedMenuTitle = Instance.new("TextLabel")
+savedMenuTitle.Size = UDim2.new(1, -70, 0, 40)
+savedMenuTitle.BackgroundTransparency = 1
+savedMenuTitle.Text = "SAVED SKINS"
+savedMenuTitle.TextColor3 = Color3.fromRGB(200, 200, 210)
+savedMenuTitle.Font = Enum.Font.GothamBold
+savedMenuTitle.TextSize = 18
+savedMenuTitle.Parent = savedSkinsMenu
+
+-- Кнопка закрытия для saved skins
+local savedCloseButton = Instance.new("TextButton")
+savedCloseButton.Size = UDim2.new(0, 30, 0, 30)
+savedCloseButton.Position = UDim2.new(1, -35, 0, 5)
+savedCloseButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+savedCloseButton.BackgroundTransparency = 0.3
+savedCloseButton.Text = "X"
+savedCloseButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+savedCloseButton.Font = Enum.Font.GothamBold
+savedCloseButton.TextSize = 16
+savedCloseButton.Parent = savedSkinsMenu
+
+local savedCloseCorner = Instance.new("UICorner")
+savedCloseCorner.CornerRadius = UDim.new(0, 8)
+savedCloseCorner.Parent = savedCloseButton
+
+-- Список сохранённых скинов
+local savedSkinsList = Instance.new("ScrollingFrame")
+savedSkinsList.Name = "SavedSkinsList"
+savedSkinsList.Size = UDim2.new(1, -20, 1, -60)
+savedSkinsList.Position = UDim2.new(0, 10, 0, 50)
+savedSkinsList.BackgroundTransparency = 1
+savedSkinsList.BorderSizePixel = 0
+savedSkinsList.ScrollBarThickness = 6
+savedSkinsList.CanvasSize = UDim2.new(0, 0, 0, 0)
+savedSkinsList.Parent = savedSkinsMenu
+
+local savedListLayout = Instance.new("UIGridLayout")
+savedListLayout.CellSize = UDim2.new(0, 140, 0, 180)
+savedListLayout.CellPadding = UDim2.new(0, 10, 0, 10)
+savedListLayout.SortOrder = Enum.SortOrder.Name
+savedListLayout.Parent = savedSkinsList
+
+-- Сетка с игроками
+local playersList = Instance.new("ScrollingFrame")
+playersList.Name = "PlayersList"
+playersList.Size = UDim2.new(1, -20, 1, -60)
+playersList.Position = UDim2.new(0, 10, 0, 50)
+playersList.BackgroundTransparency = 1
+playersList.BorderSizePixel = 0
+playersList.ScrollBarThickness = 6
+playersList.CanvasSize = UDim2.new(0, 0, 0, 0)
+playersList.Parent = skinMenu
+
+local listLayout = Instance.new("UIGridLayout")
+listLayout.CellSize = UDim2.new(0, 140, 0, 180)
+listLayout.CellPadding = UDim2.new(0, 10, 0, 10)
+listLayout.SortOrder = Enum.SortOrder.Name
+listLayout.Parent = playersList
+
+-- Функция применения сохранённого скина
+local function applySavedSkin(skinData)
+    if not player.Character then return end
+
+
+    -- Удаляем старое
+    for _, item in ipairs(player.Character:GetChildren()) do
+        if item:IsA("Accessory") or item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+            item:Destroy()
+        end
+        if item:IsA("BasePart") and item.Name:sub(1, 4) == "ACC_" then
+            item:Destroy()
+        end
+    end
+
+    for _, part in ipairs(player.Character:GetChildren()) do
+        if part:IsA("BasePart") then
+            for _, child in ipairs(part:GetChildren()) do
+                if (child:IsA("Weld") or child:IsA("Motor6D")) and child.Name:find("Accessory") then
+                    child:Destroy()
+                end
+            end
+        end
+    end
+
+    wait(1.5)
+
+    -- Применяем размеры частей тела НАПРЯМУЮ (приоритет)
+    if skinData.bodyPartSizes then
+        for partName, sizeData in pairs(skinData.bodyPartSizes) do
+            local part = player.Character:FindFirstChild(partName)
+            if part and part:IsA("BasePart") then
+                local newSize = Vector3.new(unpack(sizeData))
+                part.Size = newSize
+            end
+        end
+
+        -- Применяем повторно через задержки (на случай если игра сбрасывает)
+        task.spawn(function()
+            task.wait(0.5)
+            for partName, sizeData in pairs(skinData.bodyPartSizes) do
+                local part = player.Character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    part.Size = Vector3.new(unpack(sizeData))
+                end
+            end
+        end)
+
+        task.spawn(function()
+            task.wait(1.5)
+            for partName, sizeData in pairs(skinData.bodyPartSizes) do
+                local part = player.Character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    part.Size = Vector3.new(unpack(sizeData))
+                end
+            end
+        end)
+    end
+
+    -- Применяем Humanoid scales (если есть)
+    local myHumanoid = player.Character:FindFirstChild("Humanoid")
+    if myHumanoid and skinData.bodyScales then
+        pcall(function()
+            if skinData.bodyScales.BodyDepthScale and myHumanoid:FindFirstChild("BodyDepthScale") then
+                myHumanoid.BodyDepthScale.Value = skinData.bodyScales.BodyDepthScale
+            end
+            if skinData.bodyScales.BodyWidthScale and myHumanoid:FindFirstChild("BodyWidthScale") then
+                myHumanoid.BodyWidthScale.Value = skinData.bodyScales.BodyWidthScale
+            end
+            if skinData.bodyScales.BodyHeightScale and myHumanoid:FindFirstChild("BodyHeightScale") then
+                myHumanoid.BodyHeightScale.Value = skinData.bodyScales.BodyHeightScale
+            end
+            if skinData.bodyScales.HeadScale and myHumanoid:FindFirstChild("HeadScale") then
+                myHumanoid.HeadScale.Value = skinData.bodyScales.HeadScale
+            end
+        end)
+    end
+
+    -- Применяем одежду
+    for _, clothItem in ipairs(skinData.clothes) do
+        local clone = clothItem:Clone()
+        clone.Parent = player.Character
+    end
+
+    -- Применяем Body Colors
+    if skinData.bodyColors then
+        local myBodyColors = player.Character:FindFirstChild("Body Colors")
+        if not myBodyColors then
+            myBodyColors = Instance.new("BodyColors")
+            myBodyColors.Parent = player.Character
+        end
+        myBodyColors.HeadColor3 = skinData.bodyColors.HeadColor3
+        myBodyColors.LeftArmColor3 = skinData.bodyColors.LeftArmColor3
+        myBodyColors.LeftLegColor3 = skinData.bodyColors.LeftLegColor3
+        myBodyColors.RightArmColor3 = skinData.bodyColors.RightArmColor3
+        myBodyColors.RightLegColor3 = skinData.bodyColors.RightLegColor3
+        myBodyColors.TorsoColor3 = skinData.bodyColors.TorsoColor3
+
+        -- Применяем цвета напрямую к частям тела (для игр где BodyColors не работает)
+        local bodyParts = {
+            {name = "Head", color = skinData.bodyColors.HeadColor3},
+            {name = "LeftUpperArm", color = skinData.bodyColors.LeftArmColor3},
+            {name = "LeftLowerArm", color = skinData.bodyColors.LeftArmColor3},
+            {name = "LeftHand", color = skinData.bodyColors.LeftArmColor3},
+            {name = "RightUpperArm", color = skinData.bodyColors.RightArmColor3},
+            {name = "RightLowerArm", color = skinData.bodyColors.RightArmColor3},
+            {name = "RightHand", color = skinData.bodyColors.RightArmColor3},
+            {name = "LeftUpperLeg", color = skinData.bodyColors.LeftLegColor3},
+            {name = "LeftLowerLeg", color = skinData.bodyColors.LeftLegColor3},
+            {name = "LeftFoot", color = skinData.bodyColors.LeftLegColor3},
+            {name = "RightUpperLeg", color = skinData.bodyColors.RightLegColor3},
+            {name = "RightLowerLeg", color = skinData.bodyColors.RightLegColor3},
+            {name = "RightFoot", color = skinData.bodyColors.RightLegColor3},
+            {name = "UpperTorso", color = skinData.bodyColors.TorsoColor3},
+            {name = "LowerTorso", color = skinData.bodyColors.TorsoColor3},
+            {name = "Torso", color = skinData.bodyColors.TorsoColor3},
+            {name = "Left Arm", color = skinData.bodyColors.LeftArmColor3},
+            {name = "Right Arm", color = skinData.bodyColors.RightArmColor3},
+            {name = "Left Leg", color = skinData.bodyColors.LeftLegColor3},
+            {name = "Right Leg", color = skinData.bodyColors.RightLegColor3}
+        }
+
+        for _, partData in ipairs(bodyParts) do
+            local part = player.Character:FindFirstChild(partData.name)
+            if part and part:IsA("BasePart") then
+                part.Color = partData.color
+            end
+        end
+    end
+
+    -- Применяем лицо
+    local myHead = player.Character:FindFirstChild("Head")
+    if myHead then
+        -- Удаляем старое лицо
+        local oldFace = myHead:FindFirstChild("face")
+        if oldFace then
+            oldFace:Destroy()
+        end
+
+        -- Применяем новое лицо если есть
+        if skinData.face then
+            local myFace = Instance.new("Decal")
+            myFace.Name = "face"
+            myFace.Face = Enum.NormalId.Front
+            myFace.Texture = skinData.face
+            myFace.Parent = myHead
+        end
+    end
+
+    -- Применяем Head Mesh
+    if skinData.headMesh then
+        local myHead = player.Character:FindFirstChild("Head")
+        if myHead then
+            local oldMesh = myHead:FindFirstChildOfClass("SpecialMesh")
+            if oldMesh then oldMesh:Destroy() end
+            local newMesh = skinData.headMesh:Clone()
+            newMesh.Parent = myHead
+        end
+    end
+
+    -- Применяем CharacterMesh
+    for _, item in ipairs(player.Character:GetChildren()) do
+        if item:IsA("CharacterMesh") then
+            item:Destroy()
+        end
+    end
+    for _, meshItem in ipairs(skinData.characterMeshes) do
+        local clone = meshItem:Clone()
+        clone.Parent = player.Character
+    end
+
+    -- Применяем меши частей тела (НОВЫЙ МЕТОД - самый важный!)
+    if skinData.bodyPartMeshes then
+        for partName, meshData in pairs(skinData.bodyPartMeshes) do
+            local part = player.Character:FindFirstChild(partName)
+            if part then
+                if meshData.Type == "MeshPart" and part:IsA("MeshPart") then
+                    -- Применяем MeshId к MeshPart
+                    part.MeshId = meshData.MeshId
+                    if meshData.TextureID then
+                        part.TextureID = meshData.TextureID
+                    end
+                    if meshData.Size then
+                        part.Size = Vector3.new(unpack(meshData.Size))
+                    end
+                elseif meshData.Type == "SpecialMesh" and part:IsA("BasePart") then
+                    -- Удаляем старый меш и создаём новый
+                    local oldMesh = part:FindFirstChildOfClass("SpecialMesh")
+                    if oldMesh then oldMesh:Destroy() end
+
+                    local newMesh = Instance.new("SpecialMesh")
+                    newMesh.MeshType = Enum.MeshType.FileMesh
+                    newMesh.MeshId = meshData.MeshId
+                    newMesh.TextureId = meshData.TextureId or ""
+                    if meshData.Scale then
+                        newMesh.Scale = Vector3.new(unpack(meshData.Scale))
+                    end
+                    newMesh.Parent = part
+
+                    if meshData.Size then
+                        part.Size = Vector3.new(unpack(meshData.Size))
+                    end
+                end
+            end
+        end
+    end
+
+    -- Применяем аксессуары
+    local accessoryCount = 0
+
+    for i, accessory in ipairs(skinData.accessories) do
+        local success, errorMsg = pcall(function()
+            -- Проверяем тип: объект или таблица данных
+            if type(accessory) == "table" then
+                -- Это данные из файла (таблица)
+                if not accessory.MeshId or accessory.MeshId == "" then
+                    return
+                end
+
+                if not accessory.AttachmentName or accessory.AttachmentName == "" then
+                    return
+                end
+
+                -- ВСЕГДА создаём Part с SpecialMesh (безопаснее чем MeshPart)
+                local visualHandle = Instance.new("Part")
+                visualHandle.Name = "ACC_" .. (accessory.Name or "Accessory")
+
+                -- Для MeshPart используем маленький размер Part, размер контролируется мешем
+                if accessory.IsMeshPart then
+                    visualHandle.Size = Vector3.new(0.2, 0.2, 0.2)
+                else
+                    visualHandle.Size = Vector3.new(unpack(accessory.HandleSize or {1, 1, 1}))
+                end
+
+                visualHandle.Transparency = accessory.HandleTransparency or 0
+                visualHandle.CanCollide = false
+                visualHandle.Massless = true
+                visualHandle.Anchored = true
+
+                -- Создаём SpecialMesh
+                local mesh = Instance.new("SpecialMesh")
+                mesh.MeshType = Enum.MeshType.FileMesh
+                mesh.MeshId = accessory.MeshId
+                mesh.TextureId = accessory.TextureId or ""
+                mesh.Scale = Vector3.new(unpack(accessory.MeshScale or {1, 1, 1}))
+                mesh.Parent = visualHandle
+
+                -- Ищем соответствующий Attachment на персонаже
+                local myAttachment = nil
+                local myPart = nil
+
+                for _, part in ipairs(player.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        local att = part:FindFirstChild(accessory.AttachmentName)
+                        if att then
+                            myAttachment = att
+                            myPart = part
+                            break
+                        end
+                    end
+                end
+
+                if not myAttachment then
+                    return
+                end
+
+                visualHandle.Parent = player.Character
+
+                -- Восстанавливаем CFrame из сохранённых данных
+                local offset = CFrame.new(0, 0, 0)
+                if accessory.AttachmentCFrame and #accessory.AttachmentCFrame == 12 then
+                    offset = CFrame.new(unpack(accessory.AttachmentCFrame))
+                end
+
+                -- Обновляем позицию каждый кадр
+                RunService.RenderStepped:Connect(function()
+                    if not visualHandle.Parent or not myPart.Parent then return end
+
+                    local currentAtt = myPart:FindFirstChild(myAttachment.Name)
+                    if currentAtt then
+                        visualHandle.CFrame = currentAtt.WorldCFrame * offset:Inverse()
+                    end
+                end)
+
+                accessoryCount = accessoryCount + 1
+
+            else
+                -- Это объект Accessory (из памяти)
+                local handle = accessory:FindFirstChild("Handle", true)
+
+                if not handle then
+                    return
+                end
+
+                local handleAttachment = handle:FindFirstChildOfClass("Attachment")
+                if not handleAttachment then
+                    return
+                end
+
+                -- Ищем соответствующий Attachment на персонаже
+                local myAttachment = nil
+                local myPart = nil
+
+                for _, part in ipairs(player.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        local att = part:FindFirstChild(handleAttachment.Name)
+                        if att then
+                            myAttachment = att
+                            myPart = part
+                            break
+                        end
+                    end
+                end
+
+                if not myAttachment then
+                    return
+                end
+
+                -- Клонируем Handle
+                local visualHandle = handle:Clone()
+                visualHandle.Name = "ACC_" .. accessory.Name
+                visualHandle.CanCollide = false
+                visualHandle.Massless = true
+                visualHandle.Anchored = true
+
+                -- Удаляем всё лишнее
+                for _, child in ipairs(visualHandle:GetChildren()) do
+                    if not child:IsA("SpecialMesh") and not child:IsA("Decal") and not child:IsA("Texture") and not child:IsA("SurfaceAppearance") then
+                        child:Destroy()
+                    end
+                end
+
+                visualHandle.Parent = player.Character
+
+                -- Сохраняем offset
+                local offset = handleAttachment.CFrame
+
+                -- Обновляем позицию каждый кадр
+                RunService.RenderStepped:Connect(function()
+                    if not visualHandle.Parent or not myPart.Parent then return end
+
+                    local currentAtt = myPart:FindFirstChild(myAttachment.Name)
+                    if currentAtt then
+                        visualHandle.CFrame = currentAtt.WorldCFrame * offset:Inverse()
+                    end
+                end)
+
+                accessoryCount = accessoryCount + 1
+            end
+        end)
+
+        if not success then
+        end
+    end
+
+    -- Меняем иконку
+    avatarImage.Image = "rbxthumb://type=AvatarHeadShot&id=" .. skinData.userId .. "&w=150&h=150"
+
+end
+
+-- ФУНКЦИЯ ПРИМЕНЕНИЯ СКИНА (С ПРАВИЛЬНЫМ КОПИРОВАНИЕМ АКСЕССУАРОВ)
+local function applySkin(targetPlayer)
+    if not player.Character then return end
+
+    local targetChar = targetPlayer.Character
+    if not targetChar then
+        return
+    end
+
+    -- Проверка что персонаж цели полностью загружен
+    if not targetChar:FindFirstChild("Humanoid") or not targetChar:FindFirstChild("Head") then
+        return
+    end
+
+    -- Сохраняем выбранного игрока для переприменения после смерти
+    lastAppliedPlayer = targetPlayer
+
+    -- Сохраняем данные скина для применения даже если игрок выйдет
+    savedSkinData = {
+        playerName = targetPlayer.Name,
+        userId = targetPlayer.UserId,
+        clothes = {},
+        bodyColors = nil,
+        face = nil,
+        headMesh = nil,
+        characterMeshes = {},
+        accessories = {}
+    }
+
+    -- Сохраняем одежду
+    for _, item in ipairs(targetChar:GetChildren()) do
+        if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+            table.insert(savedSkinData.clothes, item:Clone())
+        end
+    end
+
+    -- Сохраняем Body Colors
+    local targetBodyColors = targetChar:FindFirstChild("Body Colors")
+    if targetBodyColors then
+        savedSkinData.bodyColors = {
+            HeadColor3 = targetBodyColors.HeadColor3,
+            LeftArmColor3 = targetBodyColors.LeftArmColor3,
+            LeftLegColor3 = targetBodyColors.LeftLegColor3,
+            RightArmColor3 = targetBodyColors.RightArmColor3,
+            RightLegColor3 = targetBodyColors.RightLegColor3,
+            TorsoColor3 = targetBodyColors.TorsoColor3
+        }
+    end
+
+    -- Сохраняем лицо
+    local targetHead = targetChar:FindFirstChild("Head")
+    if targetHead then
+        local targetFace = targetHead:FindFirstChild("face")
+        if targetFace then
+            savedSkinData.face = targetFace.Texture
+        end
+
+        local targetMesh = targetHead:FindFirstChildOfClass("SpecialMesh")
+        if targetMesh then
+            savedSkinData.headMesh = targetMesh:Clone()
+        end
+    end
+
+    -- Сохраняем CharacterMesh
+    for _, item in ipairs(targetChar:GetChildren()) do
+        if item:IsA("CharacterMesh") then
+            table.insert(savedSkinData.characterMeshes, item:Clone())
+        end
+    end
+
+    -- Сохраняем аксессуары
+    for _, item in ipairs(targetChar:GetChildren()) do
+        if item:IsA("Accessory") then
+            table.insert(savedSkinData.accessories, item:Clone())
+        end
+    end
+
+
+    -- Удаляем ВСЕ старые аксессуары и соединения полностью
+    for _, item in ipairs(player.Character:GetChildren()) do
+        if item:IsA("Accessory") or item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+            item:Destroy()
+        end
+        -- Удаляем старые визуальные аксессуары
+        if item:IsA("BasePart") and item.Name:sub(1, 4) == "ACC_" then
+            item:Destroy()
+        end
+    end
+
+    -- Удаляем все старые Weld и Motor6D которые могут быть от аксессуаров
+    for _, part in ipairs(player.Character:GetChildren()) do
+        if part:IsA("BasePart") then
+            for _, child in ipairs(part:GetChildren()) do
+                if (child:IsA("Weld") or child:IsA("Motor6D")) and child.Name:find("Accessory") then
+                    child:Destroy()
+                end
+            end
+        end
+    end
+
+    wait(1.5)
+
+    -- 1. Одежда
+    for _, item in ipairs(targetChar:GetChildren()) do
+        if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+            local clone = item:Clone()
+            clone.Parent = player.Character
+        end
+    end
+
+    -- 2. Body Colors
+    local targetBodyColors = targetChar:FindFirstChild("Body Colors")
+    if targetBodyColors then
+        local myBodyColors = player.Character:FindFirstChild("Body Colors")
+        if not myBodyColors then
+            myBodyColors = Instance.new("BodyColors")
+            myBodyColors.Parent = player.Character
+        end
+
+        myBodyColors.HeadColor3 = targetBodyColors.HeadColor3
+        myBodyColors.LeftArmColor3 = targetBodyColors.LeftArmColor3
+        myBodyColors.LeftLegColor3 = targetBodyColors.LeftLegColor3
+        myBodyColors.RightArmColor3 = targetBodyColors.RightArmColor3
+        myBodyColors.RightLegColor3 = targetBodyColors.RightLegColor3
+        myBodyColors.TorsoColor3 = targetBodyColors.TorsoColor3
+
+        -- Применяем цвета напрямую к частям тела (для игр где BodyColors не работает)
+        local bodyParts = {
+            {name = "Head", color = targetBodyColors.HeadColor3},
+            {name = "LeftUpperArm", color = targetBodyColors.LeftArmColor3},
+            {name = "LeftLowerArm", color = targetBodyColors.LeftArmColor3},
+            {name = "LeftHand", color = targetBodyColors.LeftArmColor3},
+            {name = "RightUpperArm", color = targetBodyColors.RightArmColor3},
+            {name = "RightLowerArm", color = targetBodyColors.RightArmColor3},
+            {name = "RightHand", color = targetBodyColors.RightArmColor3},
+            {name = "LeftUpperLeg", color = targetBodyColors.LeftLegColor3},
+            {name = "LeftLowerLeg", color = targetBodyColors.LeftLegColor3},
+            {name = "LeftFoot", color = targetBodyColors.LeftLegColor3},
+            {name = "RightUpperLeg", color = targetBodyColors.RightLegColor3},
+            {name = "RightLowerLeg", color = targetBodyColors.RightLegColor3},
+            {name = "RightFoot", color = targetBodyColors.RightLegColor3},
+            {name = "UpperTorso", color = targetBodyColors.TorsoColor3},
+            {name = "LowerTorso", color = targetBodyColors.TorsoColor3},
+            {name = "Torso", color = targetBodyColors.TorsoColor3},
+            {name = "Left Arm", color = targetBodyColors.LeftArmColor3},
+            {name = "Right Arm", color = targetBodyColors.RightArmColor3},
+            {name = "Left Leg", color = targetBodyColors.LeftLegColor3},
+            {name = "Right Leg", color = targetBodyColors.RightLegColor3}
+        }
+
+        for _, partData in ipairs(bodyParts) do
+            local part = player.Character:FindFirstChild(partData.name)
+            if part and part:IsA("BasePart") then
+                part.Color = partData.color
+            end
+        end
+    end
+
+    -- 3. Лицо
+    local myHead = player.Character:FindFirstChild("Head")
+    local targetHead = targetChar:FindFirstChild("Head")
+
+    if myHead and targetHead then
+        -- Удаляем старое лицо
+        local oldFace = myHead:FindFirstChild("face")
+        if oldFace then
+            oldFace:Destroy()
+        end
+
+        -- Применяем новое лицо
+        local targetFace = targetHead:FindFirstChild("face")
+        if targetFace then
+            local myFace = Instance.new("Decal")
+            myFace.Name = "face"
+            myFace.Face = Enum.NormalId.Front
+            myFace.Texture = targetFace.Texture
+            myFace.Parent = myHead
+        end
+
+        -- Mesh головы
+        local targetMesh = targetHead:FindFirstChildOfClass("SpecialMesh")
+        if targetMesh then
+            local myMesh = myHead:FindFirstChildOfClass("SpecialMesh")
+            if myMesh then
+                myMesh:Destroy()
+            end
+            local cloneMesh = targetMesh:Clone()
+            cloneMesh.Parent = myHead
+        end
+    end
+
+    -- 4. CharacterMesh
+    for _, item in ipairs(player.Character:GetChildren()) do
+        if item:IsA("CharacterMesh") then
+            item:Destroy()
+        end
+    end
+
+    for _, item in ipairs(targetChar:GetChildren()) do
+        if item:IsA("CharacterMesh") then
+            local clone = item:Clone()
+            clone.Parent = player.Character
+        end
+    end
+
+    -- 5. АКСЕССУАРЫ (применяем из сохранённых клонов)
+    local accessoryCount = 0
+
+    if player.Character and savedSkinData and savedSkinData.accessories then
+        for _, accessory in ipairs(savedSkinData.accessories) do
+            pcall(function()
+                -- accessory это клонированный Accessory объект
+                local handle = accessory:FindFirstChild("Handle", true)
+
+                if not handle then
+                    return
+                end
+
+                -- Ищем Attachment в Handle
+                local handleAttachment = handle:FindFirstChildOfClass("Attachment")
+                if not handleAttachment then
+                    return
+                end
+
+                -- Ищем соответствующий Attachment на МОЁМ персонаже
+                local myAttachment = nil
+                local myPart = nil
+
+                for _, part in ipairs(player.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        local att = part:FindFirstChild(handleAttachment.Name)
+                        if att then
+                            myAttachment = att
+                            myPart = part
+                            break
+                        end
+                    end
+                end
+
+                if not myAttachment then
+                    return
+                end
+
+                -- Клонируем Handle
+                local visualHandle = handle:Clone()
+                visualHandle.Name = "ACC_" .. accessory.Name
+                visualHandle.CanCollide = false
+                visualHandle.Massless = true
+                visualHandle.Anchored = true
+
+                -- Удаляем всё лишнее
+                for _, child in ipairs(visualHandle:GetChildren()) do
+                    if not child:IsA("SpecialMesh") and not child:IsA("Decal") and not child:IsA("Texture") and not child:IsA("SurfaceAppearance") then
+                        child:Destroy()
+                    end
+                end
+
+                visualHandle.Parent = player.Character
+
+                -- Сохраняем offset для этого аксессуара
+                local offset = handleAttachment.CFrame
+
+                -- Обновляем позицию каждый кадр относительно МОЕЙ части тела
+                RunService.RenderStepped:Connect(function()
+                    if not visualHandle.Parent or not myPart.Parent then return end
+
+                    local currentAtt = myPart:FindFirstChild(myAttachment.Name)
+                    if currentAtt then
+                        visualHandle.CFrame = currentAtt.WorldCFrame * offset:Inverse()
+                    end
+                end)
+
+                accessoryCount = accessoryCount + 1
+            end)
+        end
+    end
+
+    -- Сохраняем размеры тела оригинального игрока
+    local targetHumanoid = targetChar:FindFirstChild("Humanoid")
+    local myHumanoid = player.Character:FindFirstChild("Humanoid")
+    if myHumanoid and targetHumanoid then
+        pcall(function()
+            if targetHumanoid:FindFirstChild("BodyDepthScale") and myHumanoid:FindFirstChild("BodyDepthScale") then
+                myHumanoid.BodyDepthScale.Value = targetHumanoid.BodyDepthScale.Value
+            end
+            if targetHumanoid:FindFirstChild("BodyWidthScale") and myHumanoid:FindFirstChild("BodyWidthScale") then
+                myHumanoid.BodyWidthScale.Value = targetHumanoid.BodyWidthScale.Value
+            end
+            if targetHumanoid:FindFirstChild("BodyHeightScale") and myHumanoid:FindFirstChild("BodyHeightScale") then
+                myHumanoid.BodyHeightScale.Value = targetHumanoid.BodyHeightScale.Value
+            end
+            if targetHumanoid:FindFirstChild("HeadScale") and myHumanoid:FindFirstChild("HeadScale") then
+                myHumanoid.HeadScale.Value = targetHumanoid.HeadScale.Value
+            end
+        end)
+    end
+
+    -- Меняем иконку
+    avatarImage.Image = "rbxthumb://type=AvatarHeadShot&id=" .. targetPlayer.UserId .. "&w=150&h=150"
+
+end
+
+-- Функция создания карточки игрока с 3D моделью
+local function createPlayerButton(targetPlayer)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, 0, 1, 0)
+    card.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+    card.BackgroundTransparency = 0.2
+    card.BorderSizePixel = 0
+    card.Parent = playersList
+
+    local cardCorner = Instance.new("UICorner")
+    cardCorner.CornerRadius = UDim.new(0, 10)
+    cardCorner.Parent = card
+
+    -- ViewportFrame для 3D модели
+    local viewport = Instance.new("ViewportFrame")
+    viewport.Size = UDim2.new(1, 0, 0, 130)
+    viewport.BackgroundTransparency = 1
+    viewport.Parent = card
+
+    -- Камера для viewport
+    local camera = Instance.new("Camera")
+    camera.Parent = viewport
+    viewport.CurrentCamera = camera
+
+    -- Освещение
+    local light = Instance.new("PointLight")
+    light.Brightness = 2
+    light.Range = 20
+    light.Parent = camera
+
+    -- Клонируем персонажа игрока
+    local charToClone = nil
+
+    if targetPlayer == player then
+        -- Для локального игрока используем оригинальный персонаж если он есть
+        if originalPlayerCharacter then
+            charToClone = originalPlayerCharacter
+        else
+            charToClone = player.Character
+        end
+    else
+        charToClone = targetPlayer.Character
+    end
+
+    if charToClone then
+        local success, err = pcall(function()
+            local charClone = charToClone:Clone()
+
+            if not charClone then
+                -- Если клонирование не удалось, показываем аватарку
+                local avatarImg = Instance.new("ImageLabel")
+                avatarImg.Size = UDim2.new(1, 0, 0, 130)
+                avatarImg.BackgroundTransparency = 1
+                avatarImg.Image = "rbxthumb://type=AvatarHeadShot&id=" .. targetPlayer.UserId .. "&w=150&h=150"
+                avatarImg.Parent = card
+
+                local avatarCorner = Instance.new("UICorner")
+                avatarCorner.CornerRadius = UDim.new(0, 10)
+                avatarCorner.Parent = avatarImg
+                return
+            end
+
+            -- Удаляем скрипты
+            for _, item in ipairs(charClone:GetDescendants()) do
+                if item:IsA("Script") or item:IsA("LocalScript") then
+                    item:Destroy()
+                end
+            end
+
+            charClone.Parent = viewport
+
+            -- Вычисляем размер персонажа
+            local humanoidRootPart = charClone:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                local cf, size = charClone:GetBoundingBox()
+                local distance = size.Y * 1.5
+                camera.CFrame = CFrame.new(cf.Position + Vector3.new(2, size.Y * 0.3, distance), cf.Position + Vector3.new(0, size.Y * 0.2, 0))
+                camera.FieldOfView = 30
+                humanoidRootPart.CFrame = CFrame.new(cf.Position) * CFrame.Angles(0, math.rad(-20), 0)
+            end
+        end)
+
+        if not success then
+            -- При ошибке показываем аватарку
+            local avatarImg = Instance.new("ImageLabel")
+            avatarImg.Size = UDim2.new(1, 0, 0, 130)
+            avatarImg.BackgroundTransparency = 1
+            avatarImg.Image = "rbxthumb://type=AvatarHeadShot&id=" .. targetPlayer.UserId .. "&w=150&h=150"
+            avatarImg.Parent = card
+
+            local avatarCorner = Instance.new("UICorner")
+            avatarCorner.CornerRadius = UDim.new(0, 10)
+            avatarCorner.Parent = avatarImg
+        end
+    else
+        -- Если нет персонажа, показываем аватарку
+        local avatarImg = Instance.new("ImageLabel")
+        avatarImg.Size = UDim2.new(1, 0, 0, 130)
+        avatarImg.BackgroundTransparency = 1
+        avatarImg.Image = "rbxthumb://type=AvatarHeadShot&id=" .. targetPlayer.UserId .. "&w=150&h=150"
+        avatarImg.Parent = card
+
+        local avatarCorner = Instance.new("UICorner")
+        avatarCorner.CornerRadius = UDim.new(0, 10)
+        avatarCorner.Parent = avatarImg
+    end
+
+    -- Имя игрока
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0, 40)
+    nameLabel.Position = UDim2.new(0, 0, 1, -40)
+    nameLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    nameLabel.BackgroundTransparency = 0.3
+    nameLabel.Text = targetPlayer.Name
+    nameLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 12
+    nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    nameLabel.Parent = card
+
+    local nameCorner = Instance.new("UICorner")
+    nameCorner.CornerRadius = UDim.new(0, 8)
+    nameCorner.Parent = nameLabel
+
+    -- Кнопка для клика
+    local button = Instance.new("TextButton")
+    button.Size = UDim2.new(1, 0, 1, 0)
+    button.BackgroundTransparency = 1
+    button.Text = ""
+    button.Parent = card
+
+    button.MouseEnter:Connect(function()
+        TweenService:Create(card, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(35, 35, 42),
+            BackgroundTransparency = 0.1
+        }):Play()
+    end)
+
+    button.MouseLeave:Connect(function()
+        TweenService:Create(card, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(28, 28, 35),
+            BackgroundTransparency = 0.2
+        }):Play()
+    end)
+
+    button.MouseButton1Click:Connect(function()
+        -- Если это локальный игрок, восстанавливаем оригинальный скин
+        if targetPlayer == player then
+            if originalPlayerCharacter then
+
+                -- Удаляем все применённые скины
+                for _, item in ipairs(player.Character:GetChildren()) do
+                    if item:IsA("Accessory") or item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+                        item:Destroy()
+                    end
+                    if item:IsA("BasePart") and item.Name:sub(1, 4) == "ACC_" then
+                        item:Destroy()
+                    end
+                    if item:IsA("CharacterMesh") then
+                        item:Destroy()
+                    end
+                end
+
+                -- Удаляем старые Weld и Motor6D от аксессуаров
+                for _, part in ipairs(player.Character:GetChildren()) do
+                    if part:IsA("BasePart") then
+                        for _, child in ipairs(part:GetChildren()) do
+                            if (child:IsA("Weld") or child:IsA("Motor6D")) and child.Name:find("Accessory") then
+                                child:Destroy()
+                            end
+                        end
+                    end
+                end
+
+                wait(0.5)
+
+                -- Восстанавливаем одежду
+                for _, item in ipairs(originalPlayerCharacter:GetChildren()) do
+                    if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+                        local clone = item:Clone()
+                        clone.Parent = player.Character
+                    end
+                end
+
+                -- Восстанавливаем аксессуары (используем визуальный метод как в applySkin)
+                local accessoryCount = 0
+                for _, accessory in ipairs(originalPlayerCharacter:GetChildren()) do
+                    if accessory:IsA("Accessory") then
+                        pcall(function()
+                            local handle = accessory:FindFirstChild("Handle", true)
+                            if not handle then return end
+
+                            local handleAttachment = handle:FindFirstChildOfClass("Attachment")
+                            if not handleAttachment then return end
+
+                            -- Ищем соответствующий Attachment на персонаже
+                            local myAttachment = nil
+                            local myPart = nil
+
+                            for _, part in ipairs(player.Character:GetChildren()) do
+                                if part:IsA("BasePart") then
+                                    local att = part:FindFirstChild(handleAttachment.Name)
+                                    if att then
+                                        myAttachment = att
+                                        myPart = part
+                                        break
+                                    end
+                                end
+                            end
+
+                            if not myAttachment then return end
+
+                            -- Клонируем Handle
+                            local visualHandle = handle:Clone()
+                            visualHandle.Name = "ACC_" .. accessory.Name
+                            visualHandle.CanCollide = false
+                            visualHandle.Massless = true
+                            visualHandle.Anchored = true
+
+                            -- Удаляем всё лишнее
+                            for _, child in ipairs(visualHandle:GetChildren()) do
+                                if not child:IsA("SpecialMesh") and not child:IsA("Decal") and not child:IsA("Texture") and not child:IsA("SurfaceAppearance") then
+                                    child:Destroy()
+                                end
+                            end
+
+                            visualHandle.Parent = player.Character
+
+                            -- Сохраняем offset
+                            local offset = handleAttachment.CFrame
+
+                            -- Обновляем позицию каждый кадр
+                            RunService.RenderStepped:Connect(function()
+                                if not visualHandle.Parent or not myPart.Parent then return end
+
+                                local currentAtt = myPart:FindFirstChild(myAttachment.Name)
+                                if currentAtt then
+                                    visualHandle.CFrame = currentAtt.WorldCFrame * offset:Inverse()
+                                end
+                            end)
+
+                            accessoryCount = accessoryCount + 1
+                        end)
+                    end
+                end
+
+                -- Восстанавливаем Body Colors
+                local origBodyColors = originalPlayerCharacter:FindFirstChild("Body Colors")
+                if origBodyColors then
+                    local myBodyColors = player.Character:FindFirstChild("Body Colors")
+                    if not myBodyColors then
+                        myBodyColors = Instance.new("BodyColors")
+                        myBodyColors.Parent = player.Character
+                    end
+                    myBodyColors.HeadColor3 = origBodyColors.HeadColor3
+                    myBodyColors.LeftArmColor3 = origBodyColors.LeftArmColor3
+                    myBodyColors.LeftLegColor3 = origBodyColors.LeftLegColor3
+                    myBodyColors.RightArmColor3 = origBodyColors.RightArmColor3
+                    myBodyColors.RightLegColor3 = origBodyColors.RightLegColor3
+                    myBodyColors.TorsoColor3 = origBodyColors.TorsoColor3
+                end
+
+                -- Восстанавливаем лицо
+                local origHead = originalPlayerCharacter:FindFirstChild("Head")
+                local myHead = player.Character:FindFirstChild("Head")
+                if origHead and myHead then
+                    -- Удаляем старое лицо
+                    local oldFace = myHead:FindFirstChild("face")
+                    if oldFace then oldFace:Destroy() end
+
+                    local origFace = origHead:FindFirstChild("face")
+                    if origFace then
+                        local myFace = Instance.new("Decal")
+                        myFace.Name = "face"
+                        myFace.Face = Enum.NormalId.Front
+                        myFace.Texture = origFace.Texture
+                        myFace.Parent = myHead
+                    end
+
+                    -- Восстанавливаем Head Mesh
+                    local origMesh = origHead:FindFirstChildOfClass("SpecialMesh")
+                    if origMesh then
+                        local myMesh = myHead:FindFirstChildOfClass("SpecialMesh")
+                        if myMesh then myMesh:Destroy() end
+                        local cloneMesh = origMesh:Clone()
+                        cloneMesh.Parent = myHead
+                    end
+                end
+
+                -- Восстанавливаем CharacterMesh
+                for _, item in ipairs(originalPlayerCharacter:GetChildren()) do
+                    if item:IsA("CharacterMesh") then
+                        local clone = item:Clone()
+                        clone.Parent = player.Character
+                    end
+                end
+
+                -- Сбрасываем сохранённые данные
+                savedSkinData = nil
+                lastAppliedPlayer = nil
+
+                -- Возвращаем иконку на оригинальный аватар
+                avatarImage.Image = "rbxthumb://type=AvatarHeadShot&id=" .. player.UserId .. "&w=150&h=150"
+
+            else
+            end
+        else
+            applySkin(targetPlayer)
+        end
+        skinMenu.Visible = false
+    end)
+
+    -- Кнопка "Save" (только если это не локальный игрок)
+    if targetPlayer ~= player then
+        local saveButton = Instance.new("TextButton")
+        saveButton.Size = UDim2.new(0, 50, 0, 25)
+        saveButton.Position = UDim2.new(1, -55, 0, 5)
+        saveButton.BackgroundColor3 = Color3.fromRGB(50, 200, 100)
+        saveButton.BackgroundTransparency = 0.3
+        saveButton.Text = "SAVE"
+        saveButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+        saveButton.Font = Enum.Font.GothamBold
+        saveButton.TextSize = 10
+        saveButton.ZIndex = 2
+        saveButton.Parent = card
+
+        local saveCorner = Instance.new("UICorner")
+        saveCorner.CornerRadius = UDim.new(0, 6)
+        saveCorner.Parent = saveButton
+
+        -- Проверяем, сохранён ли уже этот скин
+        local alreadySaved = false
+        for _, savedSkin in ipairs(savedSkins) do
+            if savedSkin.playerName == targetPlayer.Name then
+                alreadySaved = true
+                break
+            end
+        end
+
+        if alreadySaved then
+            saveButton.Text = "SAVED!"
+            saveButton.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+        end
+
+        saveButton.MouseButton1Click:Connect(function()
+            -- Проверяем существует ли уже скин этого игрока
+            local existingIndex = nil
+            for i, savedSkin in ipairs(savedSkins) do
+                if savedSkin.playerName == targetPlayer.Name then
+                    existingIndex = i
+                    break
+                end
+            end
+
+            if existingIndex then
+                table.remove(savedSkins, existingIndex)
+            end
+
+            -- Сохраняем скин в список
+            local skinData = {
+                playerName = targetPlayer.Name,
+                userId = targetPlayer.UserId,
+                clothes = {},
+                bodyColors = nil,
+                face = nil,
+                headMesh = nil,
+                characterMeshes = {},
+                accessories = {},
+                characterClone = nil -- Клон персонажа для отображения
+            }
+
+            local targetChar = targetPlayer.Character
+            if targetChar then
+                -- Пытаемся сохранить клон персонажа для отображения
+                local cloneSuccess, cloneResult = pcall(function()
+                    return targetChar:Clone()
+                end)
+
+                if cloneSuccess and cloneResult then
+                    skinData.characterClone = cloneResult
+                else
+                    skinData.characterClone = nil
+                end
+
+                -- Сохраняем одежду
+                for _, item in ipairs(targetChar:GetChildren()) do
+                    if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
+                        table.insert(skinData.clothes, item:Clone())
+                    end
+                end
+
+                -- Сохраняем Body Colors
+                local targetBodyColors = targetChar:FindFirstChild("Body Colors")
+                if targetBodyColors then
+                    skinData.bodyColors = {
+                        HeadColor3 = targetBodyColors.HeadColor3,
+                        LeftArmColor3 = targetBodyColors.LeftArmColor3,
+                        LeftLegColor3 = targetBodyColors.LeftLegColor3,
+                        RightArmColor3 = targetBodyColors.RightArmColor3,
+                        RightLegColor3 = targetBodyColors.RightLegColor3,
+                        TorsoColor3 = targetBodyColors.TorsoColor3
+                    }
+                end
+
+                -- Сохраняем CharacterMesh (форма частей тела)
+                for _, item in ipairs(targetChar:GetChildren()) do
+                    if item:IsA("CharacterMesh") then
+                        table.insert(skinData.characterMeshes, item:Clone())
+                    end
+                end
+
+                -- Сохраняем MeshId из самих частей тела (если есть)
+                skinData.bodyPartMeshes = {}
+                local bodyParts = {"Head", "Torso", "Left Arm", "Right Arm", "Left Leg", "Right Leg",
+                                   "LeftUpperArm", "LeftLowerArm", "LeftHand", "RightUpperArm", "RightLowerArm", "RightHand",
+                                   "LeftUpperLeg", "LeftLowerLeg", "LeftFoot", "RightUpperLeg", "RightLowerLeg", "RightFoot",
+                                   "UpperTorso", "LowerTorso"}
+
+                for _, partName in ipairs(bodyParts) do
+                    local part = targetChar:FindFirstChild(partName)
+                    if part then
+                        -- Проверяем если это MeshPart
+                        if part:IsA("MeshPart") then
+                            skinData.bodyPartMeshes[partName] = {
+                                Type = "MeshPart",
+                                MeshId = part.MeshId,
+                                TextureID = part.TextureID,
+                                Size = {part.Size.X, part.Size.Y, part.Size.Z}
+                            }
+                        -- Проверяем если есть SpecialMesh внутри
+                        elseif part:IsA("BasePart") then
+                            local mesh = part:FindFirstChildOfClass("SpecialMesh")
+                            if mesh then
+                                skinData.bodyPartMeshes[partName] = {
+                                    Type = "SpecialMesh",
+                                    MeshId = mesh.MeshId,
+                                    TextureId = mesh.TextureId,
+                                    Scale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z},
+                                    Size = {part.Size.X, part.Size.Y, part.Size.Z}
+                                }
+                            end
+                        end
+                    end
+                end
+
+                -- Сохраняем размеры частей тела
+                skinData.bodyPartSizes = {}
+                for _, partName in ipairs(bodyParts) do
+                    local part = targetChar:FindFirstChild(partName)
+                    if part and part:IsA("BasePart") then
+                        skinData.bodyPartSizes[partName] = {part.Size.X, part.Size.Y, part.Size.Z}
+                    end
+                end
+
+                -- Также сохраняем Humanoid scales (на всякий случай)
+                local targetHumanoid = targetChar:FindFirstChild("Humanoid")
+                if targetHumanoid then
+                    skinData.bodyScales = {}
+                    if targetHumanoid:FindFirstChild("BodyDepthScale") then
+                        skinData.bodyScales.BodyDepthScale = targetHumanoid.BodyDepthScale.Value
+                    end
+                    if targetHumanoid:FindFirstChild("BodyWidthScale") then
+                        skinData.bodyScales.BodyWidthScale = targetHumanoid.BodyWidthScale.Value
+                    end
+                    if targetHumanoid:FindFirstChild("BodyHeightScale") then
+                        skinData.bodyScales.BodyHeightScale = targetHumanoid.BodyHeightScale.Value
+                    end
+                    if targetHumanoid:FindFirstChild("HeadScale") then
+                        skinData.bodyScales.HeadScale = targetHumanoid.HeadScale.Value
+                    end
+                end
+
+                -- Сохраняем лицо
+                local targetHead = targetChar:FindFirstChild("Head")
+                if targetHead then
+                    local targetFace = targetHead:FindFirstChild("face")
+                    if targetFace then
+                        skinData.face = targetFace.Texture
+                    end
+
+                    local targetMesh = targetHead:FindFirstChildOfClass("SpecialMesh")
+                    if targetMesh then
+                        skinData.headMesh = targetMesh:Clone()
+                    end
+                end
+
+                -- Сохраняем CharacterMesh
+                for _, item in ipairs(targetChar:GetChildren()) do
+                    if item:IsA("CharacterMesh") then
+                        table.insert(skinData.characterMeshes, item:Clone())
+                    end
+                end
+
+                -- Сохраняем аксессуары
+                for _, item in ipairs(targetChar:GetChildren()) do
+                    if item:IsA("Accessory") then
+                        table.insert(skinData.accessories, item:Clone())
+                    end
+                end
+
+                table.insert(savedSkins, skinData)
+
+                -- Визуальная обратная связь СРАЗУ
+                saveButton.Text = "SAVED!"
+                saveButton.BackgroundColor3 = Color3.fromRGB(100, 200, 100)
+
+                -- Сохраняем в файл с обработкой ошибок
+                local saveSuccess, saveErr = pcall(function()
+                    saveSavedSkinsToFile()
+                end)
+
+                if not saveSuccess then
+                    saveButton.Text = "ERROR!"
+                    saveButton.BackgroundColor3 = Color3.fromRGB(200, 100, 50)
+                end
+
+                -- Обновляем список сохранённых скинов (если функция существует)
+                if updateSavedSkinsList then
+                    task.spawn(function()
+                        task.wait(0.1)
+                        updateSavedSkinsList()
+                    end)
+                end
+            end
+        end)
+    end
+
+    return card
+end
+
+-- Функция создания карточки сохранённого скина
+local function createSavedSkinCard(skinData, index)
+    local card = Instance.new("Frame")
+    card.Size = UDim2.new(1, 0, 1, 0)
+    card.BackgroundColor3 = Color3.fromRGB(28, 28, 35)
+    card.BackgroundTransparency = 0.2
+    card.BorderSizePixel = 0
+    card.Parent = savedSkinsList
+
+    local cardCorner = Instance.new("UICorner")
+    cardCorner.CornerRadius = UDim.new(0, 10)
+    cardCorner.Parent = card
+
+    -- ViewportFrame для 3D модели
+    local viewport = Instance.new("ViewportFrame")
+    viewport.Size = UDim2.new(1, 0, 0, 130)
+    viewport.BackgroundTransparency = 1
+    viewport.Parent = card
+
+    -- Камера для viewport
+    local camera = Instance.new("Camera")
+    camera.Parent = viewport
+    viewport.CurrentCamera = camera
+
+    -- Освещение
+    local light = Instance.new("PointLight")
+    light.Brightness = 2
+    light.Range = 20
+    light.Parent = camera
+
+    -- Используем сохранённый клон персонажа
+    if skinData.characterClone then
+        local success, err = pcall(function()
+            local charClone = skinData.characterClone:Clone()
+
+            if not charClone then
+                return false
+            end
+
+            -- Удаляем скрипты
+            for _, item in ipairs(charClone:GetDescendants()) do
+                if item:IsA("Script") or item:IsA("LocalScript") then
+                    item:Destroy()
+                end
+            end
+
+            charClone.Parent = viewport
+
+            -- Позиционируем камеру
+            local humanoidRootPart = charClone:FindFirstChild("HumanoidRootPart")
+            if humanoidRootPart then
+                local cf, size = charClone:GetBoundingBox()
+                local distance = size.Y * 1.5
+                camera.CFrame = CFrame.new(cf.Position + Vector3.new(2, size.Y * 0.3, distance), cf.Position + Vector3.new(0, size.Y * 0.2, 0))
+                camera.FieldOfView = 30
+                humanoidRootPart.CFrame = CFrame.new(cf.Position) * CFrame.Angles(0, math.rad(-20), 0)
+            end
+            return true
+        end)
+
+        if not success or err == false then
+            -- Показываем аватар как fallback
+            local avatarImg = Instance.new("ImageLabel")
+            avatarImg.Size = UDim2.new(1, 0, 0, 130)
+            avatarImg.BackgroundTransparency = 1
+            avatarImg.Image = "rbxthumb://type=AvatarHeadShot&id=" .. skinData.userId .. "&w=150&h=150"
+            avatarImg.Parent = card
+
+            local avatarCorner = Instance.new("UICorner")
+            avatarCorner.CornerRadius = UDim.new(0, 10)
+            avatarCorner.Parent = avatarImg
+        end
+    else
+        -- Если нет клона, показываем аватар
+        local avatarImg = Instance.new("ImageLabel")
+        avatarImg.Size = UDim2.new(1, 0, 0, 130)
+        avatarImg.BackgroundTransparency = 1
+        avatarImg.Image = "rbxthumb://type=AvatarHeadShot&id=" .. skinData.userId .. "&w=150&h=150"
+        avatarImg.Parent = card
+
+        local avatarCorner = Instance.new("UICorner")
+        avatarCorner.CornerRadius = UDim.new(0, 10)
+        avatarCorner.Parent = avatarImg
+    end
+
+    -- Имя игрока
+    local nameLabel = Instance.new("TextLabel")
+    nameLabel.Size = UDim2.new(1, 0, 0, 40)
+    nameLabel.Position = UDim2.new(0, 0, 1, -40)
+    nameLabel.BackgroundColor3 = Color3.fromRGB(20, 20, 25)
+    nameLabel.BackgroundTransparency = 0.3
+    nameLabel.Text = skinData.playerName
+    nameLabel.TextColor3 = Color3.fromRGB(200, 200, 210)
+    nameLabel.Font = Enum.Font.GothamBold
+    nameLabel.TextSize = 12
+    nameLabel.TextTruncate = Enum.TextTruncate.AtEnd
+    nameLabel.Parent = card
+
+    local nameCorner = Instance.new("UICorner")
+    nameCorner.CornerRadius = UDim.new(0, 8)
+    nameCorner.Parent = nameLabel
+
+    -- Кнопка применить
+    local applyButton = Instance.new("TextButton")
+    applyButton.Size = UDim2.new(1, 0, 1, 0)
+    applyButton.BackgroundTransparency = 1
+    applyButton.Text = ""
+    applyButton.Parent = card
+
+    applyButton.MouseEnter:Connect(function()
+        TweenService:Create(card, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(35, 35, 42),
+            BackgroundTransparency = 0.1
+        }):Play()
+    end)
+
+    applyButton.MouseLeave:Connect(function()
+        TweenService:Create(card, TweenInfo.new(0.2), {
+            BackgroundColor3 = Color3.fromRGB(28, 28, 35),
+            BackgroundTransparency = 0.2
+        }):Play()
+    end)
+
+    applyButton.MouseButton1Click:Connect(function()
+        -- Применяем сохранённый скин
+        savedSkinData = skinData
+        applySavedSkin(skinData)
+        savedSkinsMenu.Visible = false
+    end)
+
+    -- Кнопка удалить
+    local deleteButton = Instance.new("TextButton")
+    deleteButton.Size = UDim2.new(0, 50, 0, 25)
+    deleteButton.Position = UDim2.new(1, -55, 0, 5)
+    deleteButton.BackgroundColor3 = Color3.fromRGB(200, 50, 50)
+    deleteButton.BackgroundTransparency = 0.3
+    deleteButton.Text = "DEL"
+    deleteButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+    deleteButton.Font = Enum.Font.GothamBold
+    deleteButton.TextSize = 10
+    deleteButton.ZIndex = 2
+    deleteButton.Parent = card
+
+    local deleteCorner = Instance.new("UICorner")
+    deleteCorner.CornerRadius = UDim.new(0, 6)
+    deleteCorner.Parent = deleteButton
+
+    deleteButton.MouseButton1Click:Connect(function()
+        table.remove(savedSkins, index)
+        saveSavedSkinsToFile()
+        updateSavedSkinsList()
+    end)
+
+    return card
+end
+
+-- Функция обновления списка сохранённых скинов
+local function updateSavedSkinsList()
+    for _, child in ipairs(savedSkinsList:GetChildren()) do
+        if child:IsA("Frame") then
+            child:Destroy()
+        end
+    end
+
+    for i, skinData in ipairs(savedSkins) do
+        createSavedSkinCard(skinData, i)
+    end
+
+    savedSkinsList.CanvasSize = UDim2.new(0, 0, 0, savedListLayout.AbsoluteContentSize.Y + 10)
+end
+
+-- Функция обновления списка игроков
+local function updatePlayersList()
+    for _, child in ipairs(playersList:GetChildren()) do
+        if child:IsA("Frame") then
+            child:Destroy()
+        end
+    end
+
+    -- Добавляем себя первым в список
+    createPlayerButton(player)
+
+    -- Добавляем остальных игроков
+    for _, plr in ipairs(Players:GetPlayers()) do
+        if plr ~= player then -- Не добавляем себя дважды
+            createPlayerButton(plr)
+        end
+    end
+
+    playersList.CanvasSize = UDim2.new(0, 0, 0, listLayout.AbsoluteContentSize.Y + 10)
+end
+
+-- Обработчик клика на иконку
+iconButton.MouseButton1Click:Connect(function()
+    skinMenu.Visible = not skinMenu.Visible
+
+    if skinMenu.Visible then
+        updatePlayersList()
+    end
+end)
+
+-- Кнопка закрытия
+closeButton.MouseButton1Click:Connect(function()
+    skinMenu.Visible = false
+end)
+
+-- Кнопка "Saved Skins"
+savedSkinsButton.MouseButton1Click:Connect(function()
+    skinMenu.Visible = false
+    savedSkinsMenu.Visible = true
+    updateSavedSkinsList()
+end)
+
+-- Кнопка закрытия для saved skins
+savedCloseButton.MouseButton1Click:Connect(function()
+    savedSkinsMenu.Visible = false
+end)
+
+-- Обновление списка при входе/выходе игроков
+Players.PlayerAdded:Connect(function()
+    if skinMenu.Visible then
+        updatePlayersList()
+    end
+end)
+
+Players.PlayerRemoving:Connect(function()
+    if skinMenu.Visible then
+        updatePlayersList()
+    end
+end)
+
+-- Открытие/закрытие иконки по клавише INSERT
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+
+    if input.KeyCode == Enum.KeyCode.Insert then
+        headIcon.Visible = not headIcon.Visible
+
+        if not headIcon.Visible then
+            skinMenu.Visible = false
+        end
+    end
+end)
+
+-- Сохранение скина после смерти
+player.CharacterAdded:Connect(function(newChar)
+    character = newChar
+    humanoid = newChar:WaitForChild("Humanoid")
+    head = newChar:WaitForChild("Head")
+
+    -- Переприменяем скин если был выбран
+    if savedSkinData then
+
+        task.spawn(function()
+            -- Ждём загрузку только критичных частей
+            local rootPart = newChar:WaitForChild("HumanoidRootPart", 5)
+            if not rootPart then
+                return
+            end
+
+            -- Ждём 1.5 секунды для полной загрузки персонажа
+            task.wait(1.5)
+
+            -- Проверяем что наш персонаж не изменился
+            if player.Character ~= newChar then
+                return
+            end
+
+
+            -- Применяем скин из сохранённых данных
+            local success, err = pcall(function()
+                applySavedSkin(savedSkinData)
+            end)
+
+            if not success then
+            else
+            end
+        end)
+    else
+    end
+end)
+
+
+-- Обновляем список сохранённых скинов после загрузки
+if #savedSkins > 0 then
+    updateSavedSkinsList()
+end
