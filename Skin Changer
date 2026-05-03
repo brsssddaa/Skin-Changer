@@ -1,5 +1,5 @@
 -- PREMIUM SKIN CHANGER MENU (LUXURY DARK THEME) v3.1
--- Skin changer logic + luxury Xs + HeadIcon (Insert toggles HeadIcon, click toggles menu)
+-- Skin changer logic + luxury Xs + HeadIcon (G toggles HeadIcon, click toggles menu)
 -- HeadIcon avatar updates with applied skin. Bright primary-filled Apply buttons.
 -- LocalScript
 
@@ -4368,14 +4368,14 @@ function setHeadIconAvatar(userId)
 end
 
 ----------------------------------------------------------------
--- INSERT: анимация очков → меню (повторно — закрыть меню + снять очки).
--- END:    скрыть/показать HeadIcon (меню НЕ закрывается).
+-- G:   анимация очков → меню (повторно — закрыть меню + снять очки).
+-- END: скрыть/показать HeadIcon (меню НЕ закрывается).
 ----------------------------------------------------------------
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if scriptDisabled then return end
 
-    if input.KeyCode == Enum.KeyCode.Insert then
+    if input.KeyCode == Enum.KeyCode.G then
         if g_isAnimating then return end
         if not g_glassesOpen then
             -- Очков нет → анимация надевания + показ панелей
@@ -6581,5 +6581,5 @@ task.spawn(function()
         end
     end)
 end)
--- Меню стартует скрытым; HeadIcon видна, Insert/click открывает.
-print("[SkinChanger Premium] v3 loaded — Insert/HeadIcon to toggle.")
+-- Меню стартует скрытым; HeadIcon видна, G/click открывает.
+print("[SkinChanger Premium] v3 loaded — G/HeadIcon to toggle.")
