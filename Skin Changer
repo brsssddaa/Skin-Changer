@@ -61,7 +61,7 @@ end
 
 local rebuildWorldPanels  -- forward declaration (определён ниже в world-menu блоке)
 
-function applyTheme(themeData)
+function applyTheme(themeData, skipPersist)
     Theme.primary = themeData.primary
     Theme.dark    = themeData.dark
     Theme.name    = themeData.name
@@ -72,6 +72,10 @@ function applyTheme(themeData)
     end
     -- Live-обновление world-панелей (если очки надеты и панели видны)
     if rebuildWorldPanels then pcall(rebuildWorldPanels) end
+    -- Persist to Settings file (skipPersist=true used during startup restore)
+    if not skipPersist and scUpdateSetting then
+        pcall(function() scUpdateSetting("themeName", themeData.name) end)
+    end
 end
 
 ----------------------------------------------------------------
@@ -198,6 +202,25 @@ function scSetGlassesState(state)
     local bundle = scReadSkinsBundle()
     bundle.glassesState = state
     scWriteSkinsBundle(bundle)
+end
+
+-- Settings file: persistent preferences applied on EVERY launch (manual or autoexec)
+SC_SETTINGS_FILE = SC_DIR .. "/SkinChanger_Settings"
+
+function scReadSettings()
+    local data = scReadJSON(SC_SETTINGS_FILE)
+    if type(data) ~= "table" then data = {} end
+    return data
+end
+
+function scWriteSettings(tbl)
+    return scWriteJSON(SC_SETTINGS_FILE, tbl)
+end
+
+function scUpdateSetting(key, value)
+    local s = scReadSettings()
+    s[key] = value
+    scWriteSettings(s)
 end
 
 -- One-shot migration from legacy files
@@ -1075,6 +1098,9 @@ local function applyShaderPreset(presetName)
         end)
     end)
     shaderConnections.persist = persistConn
+
+    -- Persist shader choice
+    pcall(function() scUpdateSetting("shaderPreset", presetName) end)
 end
 
 -- Immediate teardown without tweens (used for preset swapping)
@@ -1157,6 +1183,9 @@ local function removeShader()
 
     -- Clear originals so next apply captures fresh Lighting (user may have changed game state)
     shaderOriginals = nil
+
+    -- Persist: no shader
+    pcall(function() scUpdateSetting("shaderPreset", nil) end)
 end
 
 -- Backward-compat aliases (used by Close Script handler)
@@ -1193,10 +1222,11 @@ function applySavedSkin(skinData)
     for i, skin in ipairs(savedSkins) do
         if skin.playerName == skinData.playerName and skin.userId == skinData.userId then
             lastAppliedSkinIndex = i
+            local snapshot = { index = i, userId = skin.userId, playerName = skin.playerName }
             -- Save to autoexec file ONLY if autoexec is enabled
-            pcall(function()
-                scSetLastSkinIfAutoexec({ index = i })
-            end)
+            pcall(function() scSetLastSkinIfAutoexec(snapshot) end)
+            -- Always persist to Settings (used for reference/display; does NOT auto-apply on manual launch)
+            pcall(function() scUpdateSetting("lastSkin", snapshot) end)
             break
         end
     end
@@ -4400,10 +4430,17 @@ function openMenu()
         end
     end)
 
-    -- Init анимация
-    mainContainer.Size = UDim2.fromOffset(W * 0.85, H * 0.85)
+    -- Init анимация: стартует маленьким и сильно закруглённым ("капсула"), раскрывается до прямоугольника
+    mainContainer.Size = UDim2.fromOffset(W * 0.5, H * 0.35)
     mainContainer.BackgroundTransparency = 1
     backdrop.BackgroundTransparency = 1
+
+    local mainCorner = mainContainer:FindFirstChildOfClass("UICorner")
+    if mainCorner then
+        mainCorner.CornerRadius = UDim.new(0, math.min(W * 0.25, H * 0.18, 120))
+        tween(mainCorner, 0.55, {CornerRadius = UDim.new(0, 14)},
+            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+    end
 
     tween(backdrop, 0.4, {BackgroundTransparency = 0.35})
     tween(mainContainer, 0.55,
@@ -4447,8 +4484,13 @@ function closeMenu()
     if paletteOpen then togglePalette(false) end
     tween(backdrop, 0.25, {BackgroundTransparency = 1})
     tween(mainContainer, 0.3,
-        {Size = UDim2.fromOffset(W * 0.85, H * 0.85), BackgroundTransparency = 1},
+        {Size = UDim2.fromOffset(W * 0.5, H * 0.35), BackgroundTransparency = 1},
         Enum.EasingStyle.Back, Enum.EasingDirection.In)
+    local mainCorner = mainContainer:FindFirstChildOfClass("UICorner")
+    if mainCorner then
+        tween(mainCorner, 0.3, {CornerRadius = UDim.new(0, math.min(W * 0.25, H * 0.18, 120))},
+            Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+    end
     UserInputService.MouseIconEnabled = true
     task.delay(0.32, function()
         if not menuVisible then
@@ -5238,6 +5280,15 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
             pcall(function() scSetAutoexecEnabled(autoexecEnabled) end)
             
             if autoexecEnabled then
+                -- Snapshot currently-applied skin (fix: previously lastSkin stayed nil
+                -- if user applied skin BEFORE enabling autoexec → fallback to slot 1 on rejoin)
+                pcall(function()
+                    local idx = lastAppliedSkinIndex
+                    if idx and savedSkins[idx] then
+                        local s = savedSkins[idx]
+                        scSetLastSkinIfAutoexec({ index = idx, userId = s.userId, playerName = s.playerName })
+                    end
+                end)
                 local success, result = createAutoInjectScripts()
                 setupQueueOnTeleport()
                 if success then
@@ -6684,6 +6735,27 @@ updatePlayersList()
 -- Initial head icon viewport render
 pcall(updateHeadIconViewport)
 
+-- Restore persistent settings on EVERY launch (manual or autoexec): theme color + shader pack
+task.spawn(function()
+    pcall(function()
+        local settings = scReadSettings()
+        -- Restore theme
+        if settings.themeName then
+            for _, t in ipairs(THEMES) do
+                if t.name == settings.themeName then
+                    applyTheme(t, true) -- skipPersist=true (we're restoring)
+                    break
+                end
+            end
+        end
+        -- Restore shaderpack (delay to let Lighting stabilize after join)
+        if settings.shaderPreset and SHADER_PRESETS[settings.shaderPreset] then
+            task.wait(1.5)
+            pcall(function() applyShaderPreset(settings.shaderPreset) end)
+        end
+    end)
+end)
+
 -- Autoexec: Check if enabled and auto-apply last skin with retry logic
 -- IMPORTANT: if autoexec is DISABLED, do nothing at all — manual launch = clean UI
 task.spawn(function()
@@ -6716,19 +6788,28 @@ task.spawn(function()
         -- Additional wait for character to fully initialize
         task.wait(1)
 
-        -- Load last applied skin index from autoexec file
-        local lastSkinIndex = nil
-        if type(ae.lastSkin) == "table" and type(ae.lastSkin.index) == "number" then
-            lastSkinIndex = ae.lastSkin.index
-            print("[SkinChanger Autoexec] Last skin index: " .. tostring(lastSkinIndex))
-        end
-
+        -- Resolve lastSkin from autoexec file (match by userId+playerName, fallback to index)
         local skinToApply = nil
-        if lastSkinIndex and savedSkins and savedSkins[lastSkinIndex] then
-            skinToApply = savedSkins[lastSkinIndex]
-        elseif savedSkins and #savedSkins > 0 then
-            skinToApply = savedSkins[1]
-            print("[SkinChanger Autoexec] Using fallback skin")
+        if type(ae.lastSkin) == "table" and savedSkins then
+            local wantUserId   = ae.lastSkin.userId
+            local wantName     = ae.lastSkin.playerName
+            local wantIndex    = ae.lastSkin.index
+            -- Prefer identity match so index changes (after adding/removing other skins) don't break it
+            if wantUserId or wantName then
+                for _, s in ipairs(savedSkins) do
+                    if (wantUserId and s.userId == wantUserId) or (wantName and s.playerName == wantName) then
+                        skinToApply = s
+                        break
+                    end
+                end
+            end
+            if not skinToApply and type(wantIndex) == "number" and savedSkins[wantIndex] then
+                skinToApply = savedSkins[wantIndex]
+            end
+            print("[SkinChanger Autoexec] lastSkin target: name=" .. tostring(wantName) .. " userId=" .. tostring(wantUserId))
+        end
+        if not skinToApply then
+            print("[SkinChanger Autoexec] No lastSkin recorded; skipping auto-apply")
         end
 
         if skinToApply then
