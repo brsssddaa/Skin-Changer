@@ -713,21 +713,32 @@ function createAutoInjectScriptContent()
 -- Auto-generated. Loads the latest script from GitHub only if autoexec is enabled.
 local AUTOEXEC_FLAG_FILE = "SkinChanger/SkinChanger_Autoexec"
 local enabled = false
-pcall(function()
-    if isfile and isfile(AUTOEXEC_FLAG_FILE) then
-        local raw = readfile(AUTOEXEC_FLAG_FILE)
-        if raw and raw ~= "" then
-            local HttpService = game:GetService("HttpService")
-            local data = HttpService:JSONDecode(raw)
-            if type(data) == "table" and data.enabled == true then
-                enabled = true
-            end
+local HttpService = game:GetService("HttpService")
+
+-- Read and parse autoexec flag with detailed error logging
+if isfile and isfile(AUTOEXEC_FLAG_FILE) then
+    local ok, raw = pcall(readfile, AUTOEXEC_FLAG_FILE)
+    if ok and raw and raw ~= "" then
+        local decodeOk, data = pcall(function()
+            return HttpService:JSONDecode(raw)
+        end)
+        if decodeOk and type(data) == "table" and data.enabled == true then
+            enabled = true
+            print("[SkinChanger AutoInject] Autoexec is enabled - loading script")
+        else
+            print("[SkinChanger AutoInject] Autoexec is disabled or data invalid - not loading")
         end
+    else
+        print("[SkinChanger AutoInject] Failed to read autoexec flag - not loading")
     end
-end)
+else
+    print("[SkinChanger AutoInject] Autoexec flag file not found - not loading")
+end
+
 if not enabled then
     return -- user disabled autoexec; stay silent
 end
+
 local success, err = pcall(function()
     loadstring(game:HttpGet("]] .. SKINCHANGER_GITHUB_URL .. [["))()
 end)
@@ -776,14 +787,15 @@ function createAutoInjectScripts()
 end
 
 -- Remove auto-inject scripts from ALL candidate paths.
--- Defense in depth: overwrite with empty content (no-op on load) THEN try delfile.
--- Even if delfile is sandboxed and silently fails, the empty file won't load the script.
+-- Defense in depth: overwrite with guarded version (checks flag and exits if disabled) THEN try delfile.
+-- Even if delfile is sandboxed and silently fails, the guarded file won't load the script.
 function removeAutoInjectScripts()
+    local guardedContent = createAutoInjectScriptContent()
     for _, folder in ipairs(AUTOEXEC_CANDIDATES) do
         local filePath = folder .. "/SkinChanger_AutoInject.lua"
-        -- 1) Overwrite with empty/no-op
+        -- 1) Overwrite with guarded version (will check flag and exit if disabled)
         if writefile then
-            pcall(function() writefile(filePath, "-- SkinChanger autoexec disabled\n") end)
+            pcall(function() writefile(filePath, guardedContent) end)
         end
         -- 2) Try to delete
         if delfile then
