@@ -4103,23 +4103,8 @@ for p, b in pairs(navButtons) do
 end
 
 ----------------------------------------------------------------
--- PULSE NAV INDICATOR
+-- PULSE NAV INDICATOR (moved to unified animation loop)
 ----------------------------------------------------------------
-task.spawn(function()
-    while screenGui and screenGui.Parent do
-        if mainContainer.Visible then
-            tween(navIndicator, 1.4, {BackgroundTransparency = 0.05},
-                  Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        end
-        task.wait(1.4)
-        if not (screenGui and screenGui.Parent) then break end
-        if mainContainer.Visible then
-            tween(navIndicator, 1.4, {BackgroundTransparency = 0.25},
-                  Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        end
-        task.wait(1.4)
-    end
-end)
 
 ----------------------------------------------------------------
 -- GLASSES ANIMATION (Insert)
@@ -4731,22 +4716,6 @@ corner(headIconGlow, 100)
 local glowStroke = stroke(headIconGlow, Theme.primary, 1, 0.55)
 themeStrokeC(glowStroke, "primary")
 
-task.spawn(function()
-    while headIconGui and headIconGui.Parent do
-        tween(headIconGlow, 1.6, {Size = UDim2.fromOffset(58, 58)},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        tween(glowStroke,   1.6, {Transparency = 0.85},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        task.wait(1.6)
-        if not (headIconGui and headIconGui.Parent) then break end
-        tween(headIconGlow, 1.6, {Size = UDim2.fromOffset(50, 50)},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        tween(glowStroke,   1.6, {Transparency = 0.55},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        task.wait(1.6)
-    end
-end)
-
 headIconBtn.MouseEnter:Connect(function()
     tween(headIcon, 0.15, {Size = UDim2.fromOffset(50, 50), BackgroundTransparency = 0.05})
 end)
@@ -4788,7 +4757,7 @@ RunService.RenderStepped:Connect(updateHeadIconPosition)
 -- Setter для аватарки на HeadIcon (вызывается при смене скина)
 function setHeadIconAvatar(userId)
     if not userId then return end
-    task.delay(0.1, updateHeadIconViewport)
+    task.delay(0.5, updateHeadIconViewport)
 end
 
 ----------------------------------------------------------------
@@ -4948,22 +4917,6 @@ RunService.RenderStepped:Connect(function()
     if not cursorGui.Enabled then return end
     local mp = UserInputService:GetMouseLocation()
     cursorRoot.Position = UDim2.fromOffset(mp.X, mp.Y)
-end)
-
-task.spawn(function()
-    while cursorGui and cursorGui.Parent do
-        tween(glowRing, 1.6, {Size = UDim2.fromOffset(44, 44)},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        tween(cursorGlowStroke, 1.6, {Transparency = 0.75},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        task.wait(1.6)
-        if not (cursorGui and cursorGui.Parent) then break end
-        tween(glowRing, 1.6, {Size = UDim2.fromOffset(36, 36)},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        tween(cursorGlowStroke, 1.6, {Transparency = 0.45},
-              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
-        task.wait(1.6)
-    end
 end)
 
 local hoverState = false
@@ -5235,17 +5188,17 @@ function createPasswordMenu()
     part.Transparency = 1
     part.Parent = worldMenuFolder
 
-    -- Position in front of player, much higher, looking down at 70 degrees
+    -- Position in front of player, looking down at 70 degrees
     local player = Players.LocalPlayer
     local char = player and player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local cam = workspace.CurrentCamera
     if hrp and cam then
         local forward = cam.CFrame.LookVector
-        local pos = hrp.Position + Vector3.new(forward.X, 0, forward.Z).Unit * 6 + Vector3.new(0, 10, 0)
+        local pos = hrp.Position + Vector3.new(forward.X, 0, forward.Z).Unit * 6 + Vector3.new(0, 6, 0)
         part.CFrame = CFrame.lookAt(pos, hrp.Position) * CFrame.Angles(math.rad(70), 0, 0)
     else
-        part.CFrame = CFrame.new(0, 12, 0)
+        part.CFrame = CFrame.new(0, 8, 0)
     end
     warn("Password menu part created in worldMenuFolder")
 
@@ -5295,7 +5248,7 @@ function createPasswordMenu()
         dragAngleOffset = -(offsetX / (screenCenterX * 0.8)) * maxAngle
         dragAngleOffset = math.clamp(dragAngleOffset, -maxAngle, maxAngle)
 
-        local maxHeight = 10
+        local maxHeight = 6
         dragHeightOffset = -(offsetY / (screenCenterY * 0.6)) * maxHeight
         dragHeightOffset = math.clamp(dragHeightOffset, 0, maxHeight)
 
@@ -5405,17 +5358,17 @@ function createEmptySpecialMenu()
     part.Transparency = 1
     part.Parent = worldMenuFolder
 
-    -- Position in front of player, much higher, looking down at 70 degrees
+    -- Position in front of player, looking down at 70 degrees
     local player = Players.LocalPlayer
     local char = player and player.Character
     local hrp = char and char:FindFirstChild("HumanoidRootPart")
     local cam = workspace.CurrentCamera
     if hrp and cam then
         local forward = cam.CFrame.LookVector
-        local pos = hrp.Position + Vector3.new(forward.X, 0, forward.Z).Unit * 6 + Vector3.new(0, 10, 0)
+        local pos = hrp.Position + Vector3.new(forward.X, 0, forward.Z).Unit * 6 + Vector3.new(0, 6, 0)
         part.CFrame = CFrame.lookAt(pos, hrp.Position) * CFrame.Angles(math.rad(70), 0, 0)
     else
-        part.CFrame = CFrame.new(0, 12, 0)
+        part.CFrame = CFrame.new(0, 8, 0)
     end
 
     -- SurfaceGui for content
@@ -5462,7 +5415,7 @@ function createEmptySpecialMenu()
         dragAngleOffset = -(offsetX / (screenCenterX * 0.8)) * maxAngle
         dragAngleOffset = math.clamp(dragAngleOffset, -maxAngle, maxAngle)
 
-        local maxHeight = 10
+        local maxHeight = 6
         dragHeightOffset = -(offsetY / (screenCenterY * 0.6)) * maxHeight
         dragHeightOffset = math.clamp(dragHeightOffset, 0, maxHeight)
 
@@ -6029,30 +5982,105 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     pingLabel.TextXAlignment = Enum.TextXAlignment.Left
     pingLabel.Parent = root
 
-    -- Update clock and ping every second
+    -- Unified animation loop - combines all periodic animations into one
+    -- This eliminates the 6-second lag caused by separate loops
+    local navState = 0  -- 0 = fading out, 1 = fading in
+    local glowState = 0  -- 0 = shrinking, 1 = growing
+    local cursorState = 0  -- 0 = shrinking, 1 = growing
     task.spawn(function()
+        local lastNavUpdate = 0
+        local lastGlowUpdate = 0
+        local lastCursorUpdate = 0
+        local lastClockUpdate = 0
+        
         while true do
-            if clock and clock.Parent then
-                clock.Text = os.date("%H:%M:%S")
-            else
-                break
-            end
-            -- Ping (Shift+F3 style: Stats.Network.ServerStatsItem["Data Ping"])
-            local pingMs = "—"
-            pcall(function()
-                local stats = game:GetService("Stats")
-                local net = stats and stats.Network
-                local item = net and net.ServerStatsItem and net.ServerStatsItem["Data Ping"]
-                if item then
-                    pingMs = tostring(math.floor(item:GetValue())) .. " ms"
-                else
-                    pingMs = tostring(math.floor(player:GetNetworkPing() * 1000)) .. " ms"
+            local now = tick()
+            local shouldContinue = false
+            
+            -- Check if any UI element is still active
+            if screenGui and screenGui.Parent then shouldContinue = true end
+            if headIconGui and headIconGui.Parent then shouldContinue = true end
+            if cursorGui and cursorGui.Parent then shouldContinue = true end
+            if clock and clock.Parent then shouldContinue = true end
+            
+            if not shouldContinue then break end
+            
+            -- Nav indicator animation (every 1.4 seconds)
+            if now - lastNavUpdate >= 1.4 and screenGui and screenGui.Parent then
+                if mainContainer.Visible then
+                    if navState == 0 then
+                        tween(navIndicator, 1.4, {BackgroundTransparency = 0.05},
+                              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                        navState = 1
+                    else
+                        tween(navIndicator, 1.4, {BackgroundTransparency = 0.25},
+                              Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                        navState = 0
+                    end
                 end
-            end)
-            if pingLabel and pingLabel.Parent then
-                pingLabel.Text = pingMs
+                lastNavUpdate = now
             end
-            task.wait(1)
+            
+            -- Head icon glow animation (every 1.6 seconds)
+            if now - lastGlowUpdate >= 1.6 and headIconGui and headIconGui.Parent then
+                if glowState == 0 then
+                    tween(headIconGlow, 1.6, {Size = UDim2.fromOffset(58, 58)},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    tween(glowStroke,   1.6, {Transparency = 0.85},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    glowState = 1
+                else
+                    tween(headIconGlow, 1.6, {Size = UDim2.fromOffset(50, 50)},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    tween(glowStroke,   1.6, {Transparency = 0.55},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    glowState = 0
+                end
+                lastGlowUpdate = now
+            end
+            
+            -- Cursor glow animation (every 1.6 seconds)
+            if now - lastCursorUpdate >= 1.6 and cursorGui and cursorGui.Parent then
+                if cursorState == 0 then
+                    tween(glowRing, 1.6, {Size = UDim2.fromOffset(44, 44)},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    tween(cursorGlowStroke, 1.6, {Transparency = 0.75},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    cursorState = 1
+                else
+                    tween(glowRing, 1.6, {Size = UDim2.fromOffset(36, 36)},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    tween(cursorGlowStroke, 1.6, {Transparency = 0.45},
+                          Enum.EasingStyle.Sine, Enum.EasingDirection.InOut)
+                    cursorState = 0
+                end
+                lastCursorUpdate = now
+            end
+            
+            -- Clock and ping update (every 1 second)
+            if now - lastClockUpdate >= 1 then
+                if clock and clock.Parent then
+                    clock.Text = os.date("%H:%M:%S")
+                end
+                -- Ping update
+                local pingMs = "—"
+                pcall(function()
+                    local stats = game:GetService("Stats")
+                    local net = stats and stats.Network
+                    local item = net and net.ServerStatsItem and net.ServerStatsItem["Data Ping"]
+                    if item then
+                        pingMs = tostring(math.floor(item:GetValue())) .. " ms"
+                    else
+                        pingMs = tostring(math.floor(player:GetNetworkPing() * 1000)) .. " ms"
+                    end
+                end)
+                if pingLabel and pingLabel.Parent then
+                    pingLabel.Text = pingMs
+                end
+                lastClockUpdate = now
+            end
+            
+            task.wait(0.1)  -- Small delay for the unified loop
         end
     end)
 
@@ -7233,6 +7261,11 @@ end
 
 -- ============= FOLLOW + BOB (physics-based pet-like) =============
 -- Вычисляем скорость игрока для idle sway
+-- Optimization: cache frequently accessed values and reduce computations
+local lastAnchorUpdate = 0
+local cachedHrpPos = Vector3.new(0, 0, 0)
+local cachedCenter = Vector3.new(0, 0, 0)
+
 RunService.RenderStepped:Connect(function(dt)
     if scriptDisabled then return end
     if not glassesMenuVisible then return end
@@ -7242,39 +7275,50 @@ RunService.RenderStepped:Connect(function(dt)
     if not g_anchorForward then return end
 
     local now = tick()
-    local center = hrp.Position + Vector3.new(0, 1.5, 0)
+    local hrpPos = hrp.Position
+    
+    -- Cache center position (only update if hrp moved significantly)
+    if (hrpPos - cachedHrpPos).Magnitude > 0.1 then
+        cachedCenter = hrpPos + Vector3.new(0, 1.5, 0)
+        cachedHrpPos = hrpPos
+    end
+    local center = cachedCenter
     local distance = 6
 
     -- Вычисляем скорость игрока (для star rate)
     if g_lastPlayerPos then
-        local vel = (hrp.Position - g_lastPlayerPos) / math.max(dt, 0.001)
+        local vel = (hrpPos - g_lastPlayerPos) / math.max(dt, 0.001)
         g_playerVelocity = Vector3.new(vel.X, 0, vel.Z)
     end
-    g_lastPlayerPos = hrp.Position
+    g_lastPlayerPos = hrpPos
     local playerSpeed = math.min(g_playerVelocity.Magnitude, 50)
     local isIdle = playerSpeed < 0.5
 
     -- Привязка к ИГРОКУ: forward из направления игрока. В первом лице - фризим (не крутим по камере)
-    do
-        local cam = workspace.CurrentCamera
-        local head = g_character:FindFirstChild("Head")
-        local isFirstPerson = false
-        if cam and head then
-            isFirstPerson = (cam.CFrame.Position - head.Position).Magnitude < 1.2
-        end
-        if not isFirstPerson then
-            local fwd = hrp.CFrame.LookVector
-            fwd = Vector3.new(fwd.X, 0, fwd.Z)
-            if fwd.Magnitude > 0.001 then
-                fwd = fwd.Unit
-                local alpha = 1 - math.exp(-dt * 4.0)
-                local newFwd = g_anchorForward:Lerp(fwd, alpha)
-                if newFwd.Magnitude > 0.01 then
-                    g_anchorForward = newFwd.Unit
+    -- Optimization: update anchor forward less frequently (every 0.05s instead of every frame)
+    if now - lastAnchorUpdate >= 0.05 then
+        do
+            local cam = workspace.CurrentCamera
+            local head = g_character:FindFirstChild("Head")
+            local isFirstPerson = false
+            if cam and head then
+                isFirstPerson = (cam.CFrame.Position - head.Position).Magnitude < 1.2
+            end
+            if not isFirstPerson then
+                local fwd = hrp.CFrame.LookVector
+                fwd = Vector3.new(fwd.X, 0, fwd.Z)
+                if fwd.Magnitude > 0.001 then
+                    fwd = fwd.Unit
+                    local alpha = 1 - math.exp(-dt * 4.0)
+                    local newFwd = g_anchorForward:Lerp(fwd, alpha)
+                    if newFwd.Magnitude > 0.01 then
+                        g_anchorForward = newFwd.Unit
+                    end
                 end
             end
+            -- в первом лице g_anchorForward не меняется - панели стоят на месте
         end
-        -- в первом лице g_anchorForward не меняется - панели стоят на месте
+        lastAnchorUpdate = now
     end
 
     for _, p in ipairs(worldPanels) do
