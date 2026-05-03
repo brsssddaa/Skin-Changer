@@ -1226,11 +1226,12 @@ local function removeSunsetShader() removeShader() end
 ----------------------------------------------------------------
 task.spawn(function()
     local char = player.Character or player.CharacterAdded:Wait()
-    task.wait(3)
+    -- Capture original IMMEDIATELY before any skin is applied
     if char and char.Parent then
         local clone = char:Clone()
         if clone then
             originalPlayerCharacter = clone
+            print("[SkinChanger] Original character snapshot captured")
         end
     end
 end)
@@ -5114,7 +5115,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     if not isBackSide then
         flipIcon = Instance.new("TextButton")
         flipIcon.Size = UDim2.fromOffset(32, 32)
-        flipIcon.Position = UDim2.new(0, 16, 0, 24)
+        flipIcon.Position = UDim2.new(0.85, 0, 0, 24)
         flipIcon.BackgroundTransparency = 1
         flipIcon.Text = "Swap"
         flipIcon.TextColor3 = Theme.primary
@@ -5284,26 +5285,43 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         autoexecLabel.TextXAlignment = Enum.TextXAlignment.Left
         autoexecLabel.Parent = autoexecFrame
 
-        local autoexecSlider = Instance.new("TextButton")
-        autoexecSlider.Size = UDim2.new(1, -32, 0, 30)
-        autoexecSlider.Position = UDim2.new(0, 16, 0, 30)
-        autoexecSlider.BackgroundColor3 = C.BLACK
-        autoexecSlider.BackgroundTransparency = 0.2
-        autoexecSlider.Text = "OFF"
-        autoexecSlider.TextColor3 = C.WHITE
-        autoexecSlider.Font = FONT_BOLD
-        autoexecSlider.TextSize = 12
-        autoexecSlider.AutoButtonColor = false
-        autoexecSlider.Parent = autoexecFrame
-        wmCorner(autoexecSlider, 4)
-        wmStroke(autoexecSlider, Theme.primary, 1, 0.5)
+        -- Autoexec toggle (iOS-style slider)
+        local toggleBg = Instance.new("Frame")
+        toggleBg.Size = UDim2.fromOffset(50, 26)
+        toggleBg.Position = UDim2.new(1, -66, 0, 2)
+        toggleBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        toggleBg.BackgroundTransparency = 0
+        toggleBg.BorderSizePixel = 0
+        toggleBg.Parent = autoexecFrame
+        local toggleCorner = Instance.new("UICorner")
+        toggleCorner.CornerRadius = UDim.new(0, 13)
+        toggleCorner.Parent = toggleBg
+
+        local toggleThumb = Instance.new("Frame")
+        toggleThumb.Size = UDim2.fromOffset(22, 22)
+        toggleThumb.Position = UDim2.fromOffset(2, 2)
+        toggleThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        toggleThumb.BorderSizePixel = 0
+        toggleThumb.Parent = toggleBg
+        local thumbCorner = Instance.new("UICorner")
+        thumbCorner.CornerRadius = UDim.new(0, 11)
+        thumbCorner.Parent = toggleThumb
 
         local autoexecEnabled = false
 
-        autoexecSlider.MouseButton1Click:Connect(function()
-            autoexecEnabled = not autoexecEnabled
-            autoexecSlider.Text = autoexecEnabled and "ON" or "OFF"
-            autoexecSlider.BackgroundColor3 = autoexecEnabled and Theme.primary or C.BLACK
+        local function updateToggleState(enabled)
+            autoexecEnabled = enabled
+            if enabled then
+                tween(toggleThumb, 0.3, {Position = UDim2.fromOffset(26, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(toggleBg, 0.3, {BackgroundColor3 = Theme.primary}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            else
+                tween(toggleThumb, 0.3, {Position = UDim2.fromOffset(2, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(toggleBg, 0.3, {BackgroundColor3 = Color3.fromRGB(60, 60, 60)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            end
+        end
+
+        toggleBg.MouseButton1Click:Connect(function()
+            updateToggleState(not autoexecEnabled)
             
             -- Persist flag FIRST so the guarded auto-inject picks it up
             pcall(function() scSetAutoexecEnabled(autoexecEnabled) end)
@@ -5333,9 +5351,8 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
         pcall(function()
             if scIsAutoexecEnabled() then
-                autoexecEnabled = true
-                autoexecSlider.Text = "ON"
-                autoexecSlider.BackgroundColor3 = Theme.primary
+                updateToggleState(true)
+                print("[SkinChanger] Autoexec is enabled")
                 -- Re-write auto-inject + queue on teleport to keep it working after updates
                 createAutoInjectScripts()
                 setupQueueOnTeleport()
@@ -5384,10 +5401,10 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
         -- List container
         local presetList = Instance.new("Frame")
-        presetList.Size = UDim2.new(1, -32, 0, listH)
+        presetList.Size = UDim2.new(1, -32, 0, 0)  -- Start collapsed
         presetList.Position = UDim2.new(0, 16, 0, 24 + headerH + 6)
         presetList.BackgroundTransparency = 1
-        presetList.Visible = false
+        presetList.Visible = true  -- Always visible, animate size instead
         presetList.ClipsDescendants = true
         presetList.Parent = shaderFrame
 
@@ -5444,7 +5461,11 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         local expanded = false
         shaderHeader.MouseButton1Click:Connect(function()
             expanded = not expanded
-            presetList.Visible = expanded
+            if expanded then
+                tween(presetList, 0.35, {Size = UDim2.new(1, -32, 0, listH)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            else
+                tween(presetList, 0.25, {Size = UDim2.new(1, -32, 0, 0)}, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
+            end
             shaderHeader.Text = (expanded and "▼" or "▶") .. "  Choose Pack"
         end)
 
