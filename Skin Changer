@@ -919,10 +919,11 @@ end
 SHADER_PRESETS = {
     Sunset = {
         displayName = "Pack 1",
-        description = "Soft golden sunset with sun rays",
+        description = "Soft golden sunset with subtle rays",
+        kind = "sunset",
         lighting = {
             ClockTime = 17.0,
-            Brightness = 2.2,
+            Brightness = 2.0,
             Ambient = Color3.fromRGB(110, 95, 75),
             OutdoorAmbient = Color3.fromRGB(160, 130, 95),
             ColorShift_Top = Color3.fromRGB(255, 200, 140),
@@ -930,70 +931,74 @@ SHADER_PRESETS = {
             FogColor = Color3.fromRGB(255, 210, 170),
             FogStart = 0,
             FogEnd = 1500,
-            ExposureCompensation = 0.15,
+            ExposureCompensation = 0.1,
         },
         atmosphere = {
             Density = 0.3,
             Offset = 0.15,
             Color = Color3.fromRGB(230, 200, 170),
             Decay = Color3.fromRGB(255, 200, 130),
-            Glare = 2.5,
+            Glare = 1.6,
             Haze = 0.8,
         },
-        sunRays = { Intensity = 0.4, Spread = 1.0 },
-        bloom = { Intensity = 1.0, Size = 28, Threshold = 0.85 },
+        sunRays = { Intensity = 0.22, Spread = 1.0 },
+        bloom = { Intensity = 0.7, Size = 28, Threshold = 0.9 },
         colorCorrection = {
             TintColor = Color3.fromRGB(255, 230, 200),
             Saturation = 0.15,
             Contrast = 0.1,
         },
         godRays = {
-            count = 12,
+            count = 10,
             color = Color3.fromRGB(255, 220, 150),
-            transparencyBase = 0.85,
+            transparencyBase = 0.93,
             radius = 50,
             height = 120,
         },
         persistClockTime = 17.0,
     },
-    Crimson = {
+    Night = {
         displayName = "Pack 2",
-        description = "Deep red sunset with intense atmosphere",
+        description = "Starry night with comets and drifting stardust",
+        kind = "night",
         lighting = {
-            ClockTime = 17.5,
-            Brightness = 2.5,
-            Ambient = Color3.fromRGB(80, 60, 40),
-            OutdoorAmbient = Color3.fromRGB(120, 80, 60),
-            ColorShift_Top = Color3.fromRGB(255, 140, 60),
-            ColorShift_Bottom = Color3.fromRGB(255, 100, 40),
-            FogColor = Color3.fromRGB(255, 160, 100),
+            ClockTime = 0.0,
+            Brightness = 0.9,
+            Ambient = Color3.fromRGB(20, 22, 40),
+            OutdoorAmbient = Color3.fromRGB(30, 35, 60),
+            ColorShift_Top = Color3.fromRGB(30, 45, 95),
+            ColorShift_Bottom = Color3.fromRGB(10, 15, 30),
+            FogColor = Color3.fromRGB(10, 12, 30),
             FogStart = 0,
-            FogEnd = 800,
-            ExposureCompensation = 0.3,
+            FogEnd = 1200,
+            ExposureCompensation = -0.25,
         },
         atmosphere = {
-            Density = 0.4,
-            Offset = 0.25,
-            Color = Color3.fromRGB(220, 170, 130),
-            Decay = Color3.fromRGB(255, 150, 80),
-            Glare = 1.5,
-            Haze = 1.2,
+            Density = 0.45,
+            Offset = 0.1,
+            Color = Color3.fromRGB(20, 25, 50),
+            Decay = Color3.fromRGB(80, 90, 160),
+            Glare = 0.2,
+            Haze = 0.6,
         },
-        sunRays = { Intensity = 0.25, Spread = 1.0 },
-        bloom = { Intensity = 1.2, Size = 24, Threshold = 0.9 },
+        sunRays = { Intensity = 0, Spread = 0 },
+        bloom = { Intensity = 1.4, Size = 36, Threshold = 0.85 },
         colorCorrection = {
-            TintColor = Color3.fromRGB(255, 200, 160),
-            Saturation = 0.3,
-            Contrast = 0.15,
+            TintColor = Color3.fromRGB(190, 205, 255),
+            Saturation = 0.1,
+            Contrast = 0.2,
         },
-        godRays = {
-            count = 8,
-            color = Color3.fromRGB(255, 180, 100),
-            transparencyBase = 0.88,
-            radius = 40,
-            height = 100,
+        night = {
+            starCount = 70,
+            starColor = Color3.fromRGB(220, 230, 255),
+            starRadius = 120,
+            starHeight = 160,
+            cometInterval = 2.5,       -- seconds between comet spawns
+            cometColor = Color3.fromRGB(255, 240, 200),
+            dustCount = 40,            -- drifting stardust particles
+            dustColor = Color3.fromRGB(180, 200, 255),
         },
-        persistClockTime = 17.5,
+        persistClockTime = 0.0,
     },
 }
 
@@ -1062,61 +1067,236 @@ local function applyShaderPreset(presetName)
         TweenService:Create(cc, TweenInfo.new(d), preset.colorCorrection):Play()
     end)
     
-    -- God rays
-    pcall(function()
-        if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
-        local folder = Instance.new("Folder")
-        folder.Name = "SkinChanger_GodRays"
-        folder.Parent = workspace
-        shaderGodRaysFolder = folder
-        
-        local cfg = preset.godRays
-        local rays = {}
-        
-        for i = 1, cfg.count do
-            local ray = Instance.new("Part")
-            ray.Name = "GodRay_" .. i
-            ray.Size = Vector3.new(8, 200, 8)
-            ray.Anchored = true
-            ray.CanCollide = false
-            ray.CanQuery = false
-            ray.CanTouch = false
-            ray.Massless = true
-            ray.Material = Enum.Material.Neon
-            ray.Color = cfg.color
-            ray.Transparency = cfg.transparencyBase
-            ray.CastShadow = false
-            
-            local mesh = Instance.new("SpecialMesh")
-            mesh.MeshType = Enum.MeshType.FileMesh
-            mesh.MeshId = "rbxasset://fonts/torso.mesh"
-            mesh.Scale = Vector3.new(1, 20, 1)
-            mesh.Parent = ray
-            
-            ray.Parent = folder
-            table.insert(rays, ray)
-        end
-        
-        local t0 = tick()
-        local conn = RunService.RenderStepped:Connect(function()
-            if not shaderActive then return end
-            local cam = workspace.CurrentCamera
-            if not cam then return end
-            local camPos = cam.CFrame.Position
-            local t = tick() - t0
-            
-            for i, ray in ipairs(rays) do
-                if ray and ray.Parent then
-                    local angle = (i / cfg.count) * math.pi * 2 + t * 0.08
-                    local offset = Vector3.new(math.cos(angle) * cfg.radius, cfg.height, math.sin(angle) * cfg.radius)
-                    local targetPos = camPos + offset
-                    ray.CFrame = CFrame.new(targetPos) * CFrame.Angles(math.rad(-20 + math.sin(t + i) * 5), angle, 0)
-                    ray.Transparency = cfg.transparencyBase + math.sin(t * 1.5 + i) * 0.04
-                end
+    -- Kind-specific effects
+    if preset.kind == "night" then
+        pcall(function()
+            if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
+            local folder = Instance.new("Folder")
+            folder.Name = "SkinChanger_NightFX"
+            folder.Parent = workspace
+            shaderGodRaysFolder = folder
+
+            local cfg = preset.night
+            local stars = {}
+
+            -- Static twinkling stars around the camera sky dome
+            for i = 1, cfg.starCount do
+                local star = Instance.new("Part")
+                star.Name = "Star_" .. i
+                star.Shape = Enum.PartType.Ball
+                star.Size = Vector3.new(0.6, 0.6, 0.6)
+                star.Anchored = true
+                star.CanCollide = false
+                star.CanQuery = false
+                star.CanTouch = false
+                star.Massless = true
+                star.Material = Enum.Material.Neon
+                star.Color = cfg.starColor
+                star.Transparency = 0.15
+                star.CastShadow = false
+
+                -- Random spherical position on sky dome
+                local theta = math.random() * math.pi * 2
+                local phi = math.random() * math.pi * 0.45  -- upper hemisphere bias
+                star._theta = theta
+                star._phi = phi
+                star._phase = math.random() * math.pi * 2
+                star.Parent = folder
+                table.insert(stars, star)
             end
+
+            -- Comets (managed list)
+            local comets = {}
+            local lastComet = tick()
+
+            local t0 = tick()
+            local conn = RunService.RenderStepped:Connect(function(dt)
+                if not shaderActive then return end
+                local cam = workspace.CurrentCamera
+                if not cam then return end
+                local camPos = cam.CFrame.Position
+                local t = tick() - t0
+
+                -- Update stars: follow camera, gentle twinkle
+                for _, s in ipairs(stars) do
+                    if s and s.Parent then
+                        local r = cfg.starRadius
+                        local x = math.sin(s._phi) * math.cos(s._theta) * r
+                        local z = math.sin(s._phi) * math.sin(s._theta) * r
+                        local y = math.cos(s._phi) * r * 0.6 + cfg.starHeight
+                        s.CFrame = CFrame.new(camPos + Vector3.new(x, y, z))
+                        s.Transparency = 0.15 + (math.sin(t * 2 + s._phase) * 0.5 + 0.5) * 0.5
+                    end
+                end
+
+                -- Spawn comets periodically
+                if tick() - lastComet >= cfg.cometInterval then
+                    lastComet = tick()
+                    local startAng = math.random() * math.pi * 2
+                    local travelDir = Vector3.new(math.cos(startAng + math.pi), -0.25, math.sin(startAng + math.pi)).Unit
+                    local startPos = camPos + Vector3.new(math.cos(startAng) * 180, cfg.starHeight + 40, math.sin(startAng) * 180)
+
+                    local comet = Instance.new("Part")
+                    comet.Shape = Enum.PartType.Ball
+                    comet.Size = Vector3.new(1.6, 1.6, 1.6)
+                    comet.Anchored = true
+                    comet.CanCollide = false
+                    comet.CanQuery = false
+                    comet.CanTouch = false
+                    comet.Massless = true
+                    comet.Material = Enum.Material.Neon
+                    comet.Color = cfg.cometColor
+                    comet.CastShadow = false
+                    comet.CFrame = CFrame.new(startPos)
+
+                    local a0 = Instance.new("Attachment")
+                    a0.Name = "A0"
+                    a0.Position = Vector3.new(0, 0, 0)
+                    a0.Parent = comet
+                    local a1 = Instance.new("Attachment")
+                    a1.Name = "A1"
+                    a1.Position = Vector3.new(0, 0.4, 0)
+                    a1.Parent = comet
+                    local trail = Instance.new("Trail")
+                    trail.Attachment0 = a0
+                    trail.Attachment1 = a1
+                    trail.Lifetime = 0.8
+                    trail.MinLength = 0
+                    trail.WidthScale = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 1),
+                        NumberSequenceKeypoint.new(1, 0),
+                    })
+                    trail.Color = ColorSequence.new(cfg.cometColor)
+                    trail.Transparency = NumberSequence.new({
+                        NumberSequenceKeypoint.new(0, 0.2),
+                        NumberSequenceKeypoint.new(1, 1),
+                    })
+                    trail.LightEmission = 1
+                    trail.Parent = comet
+
+                    comet.Parent = folder
+                    table.insert(comets, {part = comet, dir = travelDir, born = tick(), ttl = 2.2})
+                end
+
+                -- Update comets
+                for i = #comets, 1, -1 do
+                    local c = comets[i]
+                    if c.part and c.part.Parent then
+                        local age = tick() - c.born
+                        if age > c.ttl then
+                            pcall(function() c.part:Destroy() end)
+                            table.remove(comets, i)
+                        else
+                            local speed = 320
+                            c.part.CFrame = c.part.CFrame + c.dir * speed * dt
+                        end
+                    else
+                        table.remove(comets, i)
+                    end
+                end
+            end)
+            shaderConnections.godRays = conn
+
+            -- Stardust particles (ParticleEmitter on an invisible part that follows the camera)
+            local dustPart = Instance.new("Part")
+            dustPart.Name = "Stardust"
+            dustPart.Size = Vector3.new(0.1, 0.1, 0.1)
+            dustPart.Transparency = 1
+            dustPart.Anchored = true
+            dustPart.CanCollide = false
+            dustPart.CanQuery = false
+            dustPart.CanTouch = false
+            dustPart.Massless = true
+            dustPart.CastShadow = false
+            dustPart.Parent = folder
+
+            local emitter = Instance.new("ParticleEmitter")
+            emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+            emitter.Color = ColorSequence.new(cfg.dustColor)
+            emitter.Size = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.2),
+                NumberSequenceKeypoint.new(0.5, 0.8),
+                NumberSequenceKeypoint.new(1, 0),
+            })
+            emitter.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.4),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            emitter.Lifetime = NumberRange.new(3, 5)
+            emitter.Rate = cfg.dustCount
+            emitter.Speed = NumberRange.new(2, 5)
+            emitter.SpreadAngle = Vector2.new(180, 180)
+            emitter.LightEmission = 1
+            emitter.Rotation = NumberRange.new(0, 360)
+            emitter.RotSpeed = NumberRange.new(-30, 30)
+            emitter.Parent = dustPart
+
+            local camFollowConn = RunService.RenderStepped:Connect(function()
+                if not shaderActive or not dustPart.Parent then return end
+                local cam = workspace.CurrentCamera
+                if cam then
+                    dustPart.CFrame = cam.CFrame * CFrame.new(0, 0, -20)
+                end
+            end)
+            shaderConnections.stardust = camFollowConn
         end)
-        shaderConnections.godRays = conn
-    end)
+    else
+        -- Default: sunset-style god rays
+        pcall(function()
+            if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
+            local folder = Instance.new("Folder")
+            folder.Name = "SkinChanger_GodRays"
+            folder.Parent = workspace
+            shaderGodRaysFolder = folder
+
+            local cfg = preset.godRays
+            local rays = {}
+
+            for i = 1, cfg.count do
+                local ray = Instance.new("Part")
+                ray.Name = "GodRay_" .. i
+                ray.Size = Vector3.new(8, 200, 8)
+                ray.Anchored = true
+                ray.CanCollide = false
+                ray.CanQuery = false
+                ray.CanTouch = false
+                ray.Massless = true
+                ray.Material = Enum.Material.Neon
+                ray.Color = cfg.color
+                ray.Transparency = cfg.transparencyBase
+                ray.CastShadow = false
+
+                local mesh = Instance.new("SpecialMesh")
+                mesh.MeshType = Enum.MeshType.FileMesh
+                mesh.MeshId = "rbxasset://fonts/torso.mesh"
+                mesh.Scale = Vector3.new(1, 20, 1)
+                mesh.Parent = ray
+
+                ray.Parent = folder
+                table.insert(rays, ray)
+            end
+
+            local t0 = tick()
+            local conn = RunService.RenderStepped:Connect(function()
+                if not shaderActive then return end
+                local cam = workspace.CurrentCamera
+                if not cam then return end
+                local camPos = cam.CFrame.Position
+                local t = tick() - t0
+
+                for i, ray in ipairs(rays) do
+                    if ray and ray.Parent then
+                        local angle = (i / cfg.count) * math.pi * 2 + t * 0.08
+                        local offset = Vector3.new(math.cos(angle) * cfg.radius, cfg.height, math.sin(angle) * cfg.radius)
+                        local targetPos = camPos + offset
+                        ray.CFrame = CFrame.new(targetPos) * CFrame.Angles(math.rad(-20 + math.sin(t + i) * 5), angle, 0)
+                        ray.Transparency = cfg.transparencyBase + math.sin(t * 1.5 + i) * 0.04
+                    end
+                end
+            end)
+            shaderConnections.godRays = conn
+        end)
+    end
     
     -- Persistence loop
     local targetClock = preset.persistClockTime
@@ -2398,7 +2578,6 @@ end
 
 local playersBtn   = makeNavButton("PLAYERS",   "players",   1)
 local savedBtn     = makeNavButton("SAVED",     "saved",     2)
-local settingsBtn  = makeNavButton("SETTINGS",  "settings",  3)
 
 ----------------------------------------------------------------
 -- CLOSE BUTTON (luxury X)
@@ -3988,7 +4167,6 @@ end
 
 playersBtn.MouseButton1Click  :Connect(function() switchPage("players")   end)
 savedBtn.MouseButton1Click    :Connect(function() switchPage("saved")     end)
-settingsBtn.MouseButton1Click :Connect(function() switchPage("settings")  end)
 
 for p, b in pairs(navButtons) do
     b.MouseEnter:Connect(function()
@@ -5115,7 +5293,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     if not isBackSide then
         flipIcon = Instance.new("TextButton")
         flipIcon.Size = UDim2.fromOffset(32, 32)
-        flipIcon.Position = UDim2.new(0.85, 0, 0, 24)
+        flipIcon.Position = UDim2.new(0.7, 0, 0, 24)
         flipIcon.BackgroundTransparency = 1
         flipIcon.Text = "Swap"
         flipIcon.TextColor3 = Theme.primary
@@ -5177,34 +5355,6 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     -- Build different content based on side
     if isBackSide then
         -- BACK SIDE: Settings content with Autoexec
-
-        -- Floating executor label (top-left corner)
-        local execLabel = Instance.new("TextLabel")
-        execLabel.Size = UDim2.fromOffset(160, 18)
-        execLabel.Position = UDim2.new(0, 16, 0, 6)
-        execLabel.BackgroundTransparency = 1
-        execLabel.Font = Enum.Font.GothamMedium
-        execLabel.TextSize = 11
-        execLabel.TextColor3 = Theme.primary
-        execLabel.TextTransparency = 0.25
-        execLabel.TextXAlignment = Enum.TextXAlignment.Left
-        local detected = nil
-        pcall(function() detected = detectCurrentExecutor() end)
-        local execName = detected and tostring(detected):upper() or "UNKNOWN"
-        execLabel.Text = "Executor: " .. execName
-        execLabel.Parent = root
-
-        -- Gentle floating animation
-        local execBaseY = 6
-        local execConn
-        execConn = RunService.RenderStepped:Connect(function()
-            if not execLabel or not execLabel.Parent then
-                if execConn then execConn:Disconnect() end
-                return
-            end
-            local dy = math.sin(tick() * 1.6) * 2.5
-            execLabel.Position = UDim2.new(0, 16, 0, execBaseY + dy)
-        end)
 
         -- Back button (top left to flip back)
         local backBtn = Instance.new("TextButton")
@@ -5286,12 +5436,14 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         autoexecLabel.Parent = autoexecFrame
 
         -- Autoexec toggle (iOS-style slider)
-        local toggleBg = Instance.new("Frame")
+        local toggleBg = Instance.new("TextButton")
         toggleBg.Size = UDim2.fromOffset(50, 26)
-        toggleBg.Position = UDim2.new(1, -66, 0, 2)
+        toggleBg.Position = UDim2.new(0, 100, 0, 2)
         toggleBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
         toggleBg.BackgroundTransparency = 0
         toggleBg.BorderSizePixel = 0
+        toggleBg.Text = ""
+        toggleBg.AutoButtonColor = false
         toggleBg.Parent = autoexecFrame
         local toggleCorner = Instance.new("UICorner")
         toggleCorner.CornerRadius = UDim.new(0, 13)
@@ -5322,10 +5474,10 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
         toggleBg.MouseButton1Click:Connect(function()
             updateToggleState(not autoexecEnabled)
-            
+
             -- Persist flag FIRST so the guarded auto-inject picks it up
             pcall(function() scSetAutoexecEnabled(autoexecEnabled) end)
-            
+
             if autoexecEnabled then
                 -- Snapshot currently-applied skin (fix: previously lastSkin stayed nil
                 -- if user applied skin BEFORE enabling autoexec → fallback to slot 1 on rejoin)
@@ -5360,7 +5512,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         end)
 
         -- ============= SHADERPACK SECTION (collapsible category) =============
-        local presetOrder = {"Sunset", "Crimson"}
+        local presetOrder = {"Sunset", "Night"}
         local presetCount = #presetOrder
         local rowH = 32
         local rowGap = 6
@@ -5370,7 +5522,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         local shaderFrame = Instance.new("Frame")
         shaderFrame.Size = UDim2.new(1, 0, 0, 24 + headerH + listH + 10)
         shaderFrame.BackgroundTransparency = 1
-        shaderFrame.Position = UDim2.new(0, 0, 0, 150)
+        shaderFrame.Position = UDim2.new(0, 0, 0, 125)
         shaderFrame.Parent = root
 
         local shaderLabel = Instance.new("TextLabel")
@@ -5477,7 +5629,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     -- Real-time clock (top right, slightly lower)
     local clock = Instance.new("TextLabel")
     clock.Size = UDim2.fromOffset(80, 38)
-    clock.Position = UDim2.new(1, -90, 0, 24)  -- Moved slightly lower
+    clock.Position = UDim2.new(1, -90, 0, 24)
     clock.BackgroundTransparency = 1
     clock.TextColor3 = Theme.primary
     clock.Font = FONT_BOLD
@@ -5516,7 +5668,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                 end
             end)
             if pingLabel and pingLabel.Parent then
-                pingLabel.Text = "Ping: " .. pingMs
+                pingLabel.Text = pingMs
             end
             task.wait(1)
         end
@@ -5706,6 +5858,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         local clockWrap = Instance.new("Frame")
         clockWrap.Size = UDim2.new(1, 0, 0, dialSize + 30)
         clockWrap.BackgroundTransparency = 1
+        clockWrap.ClipsDescendants = true
         clockWrap.Parent = s2.content
 
         -- Digital time display
