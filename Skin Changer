@@ -319,9 +319,13 @@ loadSavedSkinsFromFile()
 -- AUTOEXEC MULTI-EXECUTOR SUPPORT
 ----------------------------------------------------------------
 
--- Common autoexec paths for different executors
+-- Common autoexec paths for different executors (try many variations)
 local AUTOEXEC_CANDIDATES = {
     "autoexec",
+    "Autoexec",
+    "AutoExec",
+    "../autoexec",
+    "../Autoexec",
     "scripts/autoexec",
     "autoexec/scripts",
     "workspace/autoexec",
@@ -499,6 +503,10 @@ end
 function getExecutorNameFromPath(path)
     local nameMap = {
         ["autoexec"] = "Generic",
+        ["Autoexec"] = "Generic",
+        ["AutoExec"] = "Generic",
+        ["../autoexec"] = "Xeno",
+        ["../Autoexec"] = "Xeno",
         ["scripts/autoexec"] = "Generic",
         ["autoexec/scripts"] = "Generic",
         ["workspace/autoexec"] = "Workspace",
@@ -523,6 +531,17 @@ end
 -- GitHub raw URL for the main script
 local SKINCHANGER_GITHUB_URL = "https://raw.githubusercontent.com/brsssddaa/Skin-Changer/refs/heads/main/Skin%20Changer"
 
+-- Queue loadstring on teleport (works for in-session teleports across ALL executors)
+function setupQueueOnTeleport()
+    local code = 'loadstring(game:HttpGet("' .. SKINCHANGER_GITHUB_URL .. '"))()'
+    local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or queueonteleport
+    if queueFn then
+        pcall(queueFn, code)
+        return true
+    end
+    return false
+end
+
 -- Create auto-inject script content (loads from GitHub)
 function createAutoInjectScriptContent()
     return [[-- SkinChanger Premium AutoInject
@@ -539,7 +558,8 @@ end
 end
 
 -- Create auto-inject scripts (aggressive: tries writing to ALL known paths)
--- Executors often hide autoexec folder from isfolder() but writefile still works
+-- NOTE: isfile/isfolder are often sandboxed to workspace, so we DON'T verify writes
+-- We trust writefile success (pcall didn't error) as the indicator
 function createAutoInjectScripts()
     if not writefile then
         return false, "writefile not supported by executor"
@@ -547,44 +567,38 @@ function createAutoInjectScripts()
     
     local content = createAutoInjectScriptContent()
     local created = {}
-    local attempted = {}
+    local errors = {}
     
-    -- Try writing to ALL candidate paths (don't pre-check with isfolder)
+    -- Try writing to ALL candidate paths
     for _, folder in ipairs(AUTOEXEC_CANDIDATES) do
         local filePath = folder .. "/SkinChanger_AutoInject.lua"
-        local writeOk = pcall(function()
+        local writeOk, writeErr = pcall(function()
             writefile(filePath, content)
         end)
         
         if writeOk then
-            -- Verify file actually exists after write
-            local verified = false
-            pcall(function()
-                if isfile and isfile(filePath) then
-                    verified = true
-                end
-            end)
-            
-            if verified then
-                local execName = getExecutorNameFromPath(folder)
-                -- Avoid duplicates
-                local alreadyAdded = false
-                for _, n in ipairs(created) do
-                    if n == execName then alreadyAdded = true; break end
-                end
-                if not alreadyAdded then
-                    table.insert(created, execName)
-                end
-                table.insert(attempted, folder)
+            local execName = getExecutorNameFromPath(folder)
+            -- Avoid duplicates
+            local alreadyAdded = false
+            for _, n in ipairs(created) do
+                if n == execName then alreadyAdded = true; break end
             end
+            if not alreadyAdded then
+                table.insert(created, execName)
+            end
+        else
+            table.insert(errors, tostring(writeErr))
         end
     end
     
     if #created == 0 then
         local detectedExec = detectCurrentExecutor()
-        local msg = "Could not write to any autoexec folder"
+        local msg = "writefile failed for all paths"
         if detectedExec then
             msg = msg .. " (Detected: " .. detectedExec:upper() .. ")"
+        end
+        if #errors > 0 then
+            msg = msg .. " - " .. errors[1]
         end
         return false, msg
     end
@@ -652,6 +666,249 @@ function getAutoInjectStatus()
     end
     
     return status
+end
+
+----------------------------------------------------------------
+-- SHADERPACK: SUNSET
+----------------------------------------------------------------
+local Lighting = game:GetService("Lighting")
+local shaderActive = false
+local shaderOriginals = nil
+local shaderEffects = {}
+local shaderGodRaysFolder = nil
+local shaderConnections = {}
+
+local function saveLightingOriginals()
+    if shaderOriginals then return end
+    shaderOriginals = {
+        ClockTime = Lighting.ClockTime,
+        Brightness = Lighting.Brightness,
+        Ambient = Lighting.Ambient,
+        OutdoorAmbient = Lighting.OutdoorAmbient,
+        ColorShift_Top = Lighting.ColorShift_Top,
+        ColorShift_Bottom = Lighting.ColorShift_Bottom,
+        FogColor = Lighting.FogColor,
+        FogStart = Lighting.FogStart,
+        FogEnd = Lighting.FogEnd,
+        ExposureCompensation = Lighting.ExposureCompensation,
+        GlobalShadows = Lighting.GlobalShadows,
+    }
+end
+
+local function tweenLightingProp(prop, value, duration)
+    pcall(function()
+        TweenService:Create(Lighting, TweenInfo.new(duration, Enum.EasingStyle.Quad, Enum.EasingDirection.Out), {[prop] = value}):Play()
+    end)
+end
+
+local function createOrGetEffect(className, name)
+    local existing = Lighting:FindFirstChild(name)
+    if existing and existing:IsA(className) then
+        return existing, false
+    end
+    local eff = Instance.new(className)
+    eff.Name = name
+    eff.Parent = Lighting
+    return eff, true
+end
+
+local function applySunsetShader()
+    if shaderActive then return end
+    shaderActive = true
+    saveLightingOriginals()
+    
+    local d = 1.5 -- tween duration
+    
+    -- Lighting properties
+    tweenLightingProp("ClockTime", 17.5, d)
+    tweenLightingProp("Brightness", 2.5, d)
+    tweenLightingProp("Ambient", Color3.fromRGB(80, 60, 40), d)
+    tweenLightingProp("OutdoorAmbient", Color3.fromRGB(120, 80, 60), d)
+    tweenLightingProp("ColorShift_Top", Color3.fromRGB(255, 140, 60), d)
+    tweenLightingProp("ColorShift_Bottom", Color3.fromRGB(255, 100, 40), d)
+    tweenLightingProp("FogColor", Color3.fromRGB(255, 160, 100), d)
+    tweenLightingProp("FogStart", 0, d)
+    tweenLightingProp("FogEnd", 800, d)
+    tweenLightingProp("ExposureCompensation", 0.3, d)
+    pcall(function() Lighting.GlobalShadows = true end)
+    
+    -- Atmosphere
+    local atmosphere, created = createOrGetEffect("Atmosphere", "SkinChanger_Atmosphere")
+    if created then
+        atmosphere.Density = 0
+        atmosphere.Offset = 0
+    end
+    shaderEffects.atmosphere = atmosphere
+    pcall(function()
+        TweenService:Create(atmosphere, TweenInfo.new(d), {
+            Density = 0.4,
+            Offset = 0.25,
+            Color = Color3.fromRGB(220, 170, 130),
+            Decay = Color3.fromRGB(255, 150, 80),
+            Glare = 1.5,
+            Haze = 1.2,
+        }):Play()
+    end)
+    
+    -- SunRays
+    local sunRays = createOrGetEffect("SunRaysEffect", "SkinChanger_SunRays")
+    sunRays.Intensity = 0
+    sunRays.Spread = 1
+    shaderEffects.sunRays = sunRays
+    pcall(function()
+        TweenService:Create(sunRays, TweenInfo.new(d), {Intensity = 0.25}):Play()
+    end)
+    
+    -- Bloom
+    local bloom = createOrGetEffect("BloomEffect", "SkinChanger_Bloom")
+    bloom.Intensity = 0
+    bloom.Size = 24
+    bloom.Threshold = 0.9
+    shaderEffects.bloom = bloom
+    pcall(function()
+        TweenService:Create(bloom, TweenInfo.new(d), {Intensity = 1.2}):Play()
+    end)
+    
+    -- ColorCorrection
+    local cc = createOrGetEffect("ColorCorrectionEffect", "SkinChanger_ColorCorrection")
+    cc.TintColor = Color3.fromRGB(255, 255, 255)
+    cc.Saturation = 0
+    cc.Contrast = 0
+    cc.Brightness = 0
+    shaderEffects.cc = cc
+    pcall(function()
+        TweenService:Create(cc, TweenInfo.new(d), {
+            TintColor = Color3.fromRGB(255, 200, 160),
+            Saturation = 0.3,
+            Contrast = 0.15,
+        }):Play()
+    end)
+    
+    -- God rays (volumetric light beams)
+    pcall(function()
+        if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
+        local folder = Instance.new("Folder")
+        folder.Name = "SkinChanger_GodRays"
+        folder.Parent = workspace
+        shaderGodRaysFolder = folder
+        
+        local numRays = 8
+        local rays = {}
+        local camera = workspace.CurrentCamera
+        
+        for i = 1, numRays do
+            local ray = Instance.new("Part")
+            ray.Name = "GodRay_" .. i
+            ray.Size = Vector3.new(8, 200, 8)
+            ray.Anchored = true
+            ray.CanCollide = false
+            ray.CanQuery = false
+            ray.CanTouch = false
+            ray.Massless = true
+            ray.Material = Enum.Material.Neon
+            ray.Color = Color3.fromRGB(255, 180, 100)
+            ray.Transparency = 0.9
+            ray.CastShadow = false
+            
+            local mesh = Instance.new("SpecialMesh")
+            mesh.MeshType = Enum.MeshType.FileMesh
+            mesh.MeshId = "rbxasset://fonts/torso.mesh"
+            mesh.Scale = Vector3.new(1, 20, 1)
+            mesh.Parent = ray
+            
+            ray.Parent = folder
+            table.insert(rays, ray)
+        end
+        
+        -- Animate god rays following camera
+        local t0 = tick()
+        local conn = RunService.RenderStepped:Connect(function()
+            if not shaderActive then return end
+            local cam = workspace.CurrentCamera
+            if not cam then return end
+            local camPos = cam.CFrame.Position
+            local t = tick() - t0
+            
+            for i, ray in ipairs(rays) do
+                if ray and ray.Parent then
+                    local angle = (i / numRays) * math.pi * 2 + t * 0.1
+                    local radius = 40
+                    local offset = Vector3.new(math.cos(angle) * radius, 100, math.sin(angle) * radius)
+                    local targetPos = camPos + offset
+                    ray.CFrame = CFrame.new(targetPos) * CFrame.Angles(math.rad(-20 + math.sin(t + i) * 5), angle, 0)
+                    ray.Transparency = 0.88 + math.sin(t * 1.5 + i) * 0.05
+                end
+            end
+        end)
+        shaderConnections.godRays = conn
+    end)
+    
+    -- Persistence loop: re-apply Lighting props in case server overwrites (Brookhaven etc.)
+    local persistConn = RunService.Heartbeat:Connect(function()
+        if not shaderActive then return end
+        pcall(function()
+            if math.abs(Lighting.ClockTime - 17.5) > 0.5 then Lighting.ClockTime = 17.5 end
+            if Lighting.FogEnd > 1500 or Lighting.FogEnd < 400 then Lighting.FogEnd = 800 end
+        end)
+    end)
+    shaderConnections.persist = persistConn
+end
+
+local function removeSunsetShader()
+    if not shaderActive then return end
+    shaderActive = false
+    
+    -- Stop connections
+    for key, conn in pairs(shaderConnections) do
+        pcall(function() conn:Disconnect() end)
+        shaderConnections[key] = nil
+    end
+    
+    local d = 1.0
+    
+    -- Restore Lighting
+    if shaderOriginals then
+        for prop, value in pairs(shaderOriginals) do
+            if prop ~= "GlobalShadows" then
+                tweenLightingProp(prop, value, d)
+            else
+                pcall(function() Lighting.GlobalShadows = value end)
+            end
+        end
+    end
+    
+    -- Fade out and destroy effects
+    task.delay(d + 0.1, function()
+        for _, name in ipairs({"SkinChanger_Atmosphere", "SkinChanger_SunRays", "SkinChanger_Bloom", "SkinChanger_ColorCorrection"}) do
+            local eff = Lighting:FindFirstChild(name)
+            if eff then pcall(function() eff:Destroy() end) end
+        end
+        shaderEffects = {}
+    end)
+    
+    -- Fade existing effects
+    if shaderEffects.sunRays then
+        pcall(function() TweenService:Create(shaderEffects.sunRays, TweenInfo.new(d), {Intensity = 0}):Play() end)
+    end
+    if shaderEffects.bloom then
+        pcall(function() TweenService:Create(shaderEffects.bloom, TweenInfo.new(d), {Intensity = 0}):Play() end)
+    end
+    if shaderEffects.cc then
+        pcall(function() TweenService:Create(shaderEffects.cc, TweenInfo.new(d), {
+            TintColor = Color3.fromRGB(255, 255, 255),
+            Saturation = 0,
+            Contrast = 0,
+        }):Play() end)
+    end
+    if shaderEffects.atmosphere then
+        pcall(function() TweenService:Create(shaderEffects.atmosphere, TweenInfo.new(d), {Density = 0, Glare = 0, Haze = 0}):Play() end)
+    end
+    
+    -- Destroy god rays
+    if shaderGodRaysFolder then
+        pcall(function() shaderGodRaysFolder:Destroy() end)
+        shaderGodRaysFolder = nil
+    end
 end
 
 ----------------------------------------------------------------
@@ -4661,7 +4918,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
         -- Autoexec multi-executor section
         local autoexecFrame = Instance.new("Frame")
-        autoexecFrame.Size = UDim2.new(1, 0, 0, 120)
+        autoexecFrame.Size = UDim2.new(1, 0, 0, 180)
         autoexecFrame.BackgroundTransparency = 1
         autoexecFrame.Position = UDim2.new(0, 0, 0, 70)
         autoexecFrame.Parent = root
@@ -4704,6 +4961,66 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         autoexecStatus.TextWrapped = true
         autoexecStatus.Parent = autoexecFrame
 
+        -- Copy AutoInject Code button (for manual placement in autoexec folder)
+        local copyBtn = Instance.new("TextButton")
+        copyBtn.Size = UDim2.new(1, -32, 0, 26)
+        copyBtn.Position = UDim2.new(0, 16, 0, 115)
+        copyBtn.BackgroundColor3 = C.BLACK
+        copyBtn.BackgroundTransparency = 0.2
+        copyBtn.Text = "📋 COPY AUTOINJECT CODE"
+        copyBtn.TextColor3 = C.WHITE
+        copyBtn.Font = FONT_BOLD
+        copyBtn.TextSize = 11
+        copyBtn.AutoButtonColor = false
+        copyBtn.Parent = autoexecFrame
+        wmCorner(copyBtn, 4)
+        wmStroke(copyBtn, Theme.primary, 1, 0.5)
+
+        local copyHint = Instance.new("TextLabel")
+        copyHint.Size = UDim2.new(1, -32, 0, 28)
+        copyHint.Position = UDim2.new(0, 16, 0, 145)
+        copyHint.BackgroundTransparency = 1
+        copyHint.Text = "Paste into a .lua file in your executor's autoexec folder\n(e.g. AppData\\Local\\Xeno\\autoexec\\SkinChanger.lua)"
+        copyHint.TextColor3 = C.TEXT_MUTE
+        copyHint.Font = FONT_SEMI
+        copyHint.TextSize = 10
+        copyHint.TextXAlignment = Enum.TextXAlignment.Left
+        copyHint.TextWrapped = true
+        copyHint.Parent = autoexecFrame
+
+        copyBtn.MouseButton1Click:Connect(function()
+            local code = createAutoInjectScriptContent()
+            local copied = false
+            pcall(function()
+                if setclipboard then
+                    setclipboard(code)
+                    copied = true
+                elseif toclipboard then
+                    toclipboard(code)
+                    copied = true
+                end
+            end)
+            if copied then
+                copyBtn.Text = "✓ COPIED! Paste into .lua file"
+                copyBtn.BackgroundColor3 = Theme.primary
+                task.delay(2, function()
+                    if copyBtn and copyBtn.Parent then
+                        copyBtn.Text = "📋 COPY AUTOINJECT CODE"
+                        copyBtn.BackgroundColor3 = C.BLACK
+                    end
+                end)
+            else
+                copyBtn.Text = "✗ Clipboard not supported"
+                copyBtn.BackgroundColor3 = C.DANGER
+                task.delay(2, function()
+                    if copyBtn and copyBtn.Parent then
+                        copyBtn.Text = "📋 COPY AUTOINJECT CODE"
+                        copyBtn.BackgroundColor3 = C.BLACK
+                    end
+                end)
+            end
+        end)
+
         local autoexecEnabled = false
         
         -- Function to update status label
@@ -4741,15 +5058,23 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
             if autoexecEnabled then
                 -- Create auto-inject scripts
                 local success, result = createAutoInjectScripts()
+                -- Also queue on teleport (for in-session teleports)
+                local teleportQueued = setupQueueOnTeleport()
                 if success then
                     local names = table.concat(result, ", ")
-                    autoexecStatus.Text = "✓ ON — auto-start on rejoin\nConfigured: " .. names
+                    local extra = teleportQueued and " + teleport queue" or ""
+                    autoexecStatus.Text = "✓ ON — auto-start on rejoin\nWritten: " .. names .. extra
                     autoexecStatus.TextColor3 = C.SAVED_OK
-                    print("[SkinChanger] Autoexec enabled for: " .. names)
+                    print("[SkinChanger] Autoexec enabled, wrote to: " .. names)
                 else
-                    autoexecStatus.Text = "✗ " .. tostring(result) .. "\nExecutor may not support autoexec"
-                    autoexecStatus.TextColor3 = C.DANGER
-                    warn("[SkinChanger] Autoexec failed: " .. tostring(result))
+                    if teleportQueued then
+                        autoexecStatus.Text = "⚠ Teleport queue only\n" .. tostring(result)
+                        autoexecStatus.TextColor3 = C.TEXT_DIM
+                    else
+                        autoexecStatus.Text = "✗ " .. tostring(result) .. "\nUse COPY button for manual setup"
+                        autoexecStatus.TextColor3 = C.DANGER
+                    end
+                    warn("[SkinChanger] Autoexec write failed: " .. tostring(result))
                 end
             else
                 -- Remove auto-inject scripts
@@ -4779,6 +5104,64 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                     createAutoInjectScripts()
                     updateAutoexecStatus()
                 end
+            end
+        end)
+
+        -- ============= SHADERPACK SECTION =============
+        local shaderFrame = Instance.new("Frame")
+        shaderFrame.Size = UDim2.new(1, 0, 0, 100)
+        shaderFrame.BackgroundTransparency = 1
+        shaderFrame.Position = UDim2.new(0, 0, 0, 260)
+        shaderFrame.Parent = root
+
+        local shaderLabel = Instance.new("TextLabel")
+        shaderLabel.Size = UDim2.new(1, 0, 0, 24)
+        shaderLabel.Position = UDim2.new(0, 16, 0, 0)
+        shaderLabel.BackgroundTransparency = 1
+        shaderLabel.Text = "Shaderpack — Sunset"
+        shaderLabel.TextColor3 = C.WHITE
+        shaderLabel.Font = FONT_BOLD
+        shaderLabel.TextSize = 14
+        shaderLabel.TextXAlignment = Enum.TextXAlignment.Left
+        shaderLabel.Parent = shaderFrame
+
+        local shaderSlider = Instance.new("TextButton")
+        shaderSlider.Size = UDim2.new(1, -32, 0, 30)
+        shaderSlider.Position = UDim2.new(0, 16, 0, 30)
+        shaderSlider.BackgroundColor3 = C.BLACK
+        shaderSlider.BackgroundTransparency = 0.2
+        shaderSlider.Text = "🌇 SUNSET OFF"
+        shaderSlider.TextColor3 = C.WHITE
+        shaderSlider.Font = FONT_BOLD
+        shaderSlider.TextSize = 12
+        shaderSlider.AutoButtonColor = false
+        shaderSlider.Parent = shaderFrame
+        wmCorner(shaderSlider, 4)
+        wmStroke(shaderSlider, Color3.fromRGB(255, 140, 60), 1, 0.3)
+
+        local shaderHint = Instance.new("TextLabel")
+        shaderHint.Size = UDim2.new(1, -32, 0, 28)
+        shaderHint.Position = UDim2.new(0, 16, 0, 65)
+        shaderHint.BackgroundTransparency = 1
+        shaderHint.Text = "Golden sunset with volumetric god rays,\nbloom & warm color correction"
+        shaderHint.TextColor3 = C.TEXT_MUTE
+        shaderHint.Font = FONT_SEMI
+        shaderHint.TextSize = 10
+        shaderHint.TextXAlignment = Enum.TextXAlignment.Left
+        shaderHint.TextWrapped = true
+        shaderHint.Parent = shaderFrame
+
+        local shaderOn = false
+        shaderSlider.MouseButton1Click:Connect(function()
+            shaderOn = not shaderOn
+            if shaderOn then
+                shaderSlider.Text = "🌇 SUNSET ON"
+                shaderSlider.BackgroundColor3 = Color3.fromRGB(255, 140, 60)
+                applySunsetShader()
+            else
+                shaderSlider.Text = "🌇 SUNSET OFF"
+                shaderSlider.BackgroundColor3 = C.BLACK
+                removeSunsetShader()
             end
         end)
 
@@ -5180,6 +5563,8 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     s3.header.MouseButton1Click:Connect(function()
         -- Отключаем бинд на очки
         scriptDisabled = true
+        -- Отключаем шейдеры
+        pcall(function() removeSunsetShader() end)
         -- Отключаем все коннекшены персонажа
         if scriptConnections.charAdded1 then pcall(function() scriptConnections.charAdded1:Disconnect() end) end
         if scriptConnections.charAdded2 then pcall(function() scriptConnections.charAdded2:Disconnect() end) end
@@ -6103,6 +6488,10 @@ task.spawn(function()
             local content = readfile("SkinChanger_Autoexec.txt")
             if content == "true" then
                 print("[SkinChanger Autoexec] Starting auto-apply sequence...")
+                -- Re-queue teleport loader (in case of next teleport)
+                pcall(setupQueueOnTeleport)
+                -- Re-write autoexec files (in case executor was reinstalled/updated)
+                pcall(createAutoInjectScripts)
                 
                 -- Wait for character to load (with timeout)
                 local charLoaded = false
