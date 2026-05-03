@@ -60,6 +60,7 @@ function onTheme(fn)
 end
 
 local rebuildWorldPanels  -- forward declaration (определён ниже в world-menu блоке)
+local worldPanels, worldMenuFolder, g_anchorForward  -- forward declarations for world-space UI
 
 function applyTheme(themeData, skipPersist)
     Theme.primary = themeData.primary
@@ -68,7 +69,7 @@ function applyTheme(themeData, skipPersist)
     activeThemeName = themeData.name
     for _, fn in ipairs(themeFns) do
         local okFn, err = pcall(fn, Theme)
-        if not okFn then warn("[Theme]", err) end
+        if not okFn then end
     end
     -- Live-обновление world-панелей (если очки надеты и панели видны)
     if rebuildWorldPanels then pcall(rebuildWorldPanels) end
@@ -730,15 +731,8 @@ if isfile and isfile(AUTOEXEC_FLAG_FILE) then
         end)
         if decodeOk and type(data) == "table" and data.enabled == true then
             enabled = true
-            print("[SkinChanger AutoInject] Autoexec is enabled - loading script")
-        else
-            print("[SkinChanger AutoInject] Autoexec is disabled or data invalid - not loading")
         end
-    else
-        print("[SkinChanger AutoInject] Failed to read autoexec flag - not loading")
     end
-else
-    print("[SkinChanger AutoInject] Autoexec flag file not found - not loading")
 end
 
 if not enabled then
@@ -749,9 +743,7 @@ local success, err = pcall(function()
     loadstring(game:HttpGet("]] .. SKINCHANGER_GITHUB_URL .. [["))()
 end)
 if not success then
-    warn("[SkinChanger AutoInject] Failed: " .. tostring(err))
-else
-    print("[SkinChanger AutoInject] Loaded from GitHub")
+    -- failed silently
 end
 ]]
 end
@@ -954,49 +946,43 @@ SHADER_PRESETS = {
             transparencyBase = 0.93,
             radius = 50,
             height = 120,
+            dustCount = 35,
+            dustColor = Color3.fromRGB(255, 230, 180),
+            petalCount = 25,
+            petalColor = Color3.fromRGB(255, 200, 160),
         },
         persistClockTime = 17.0,
     },
     Night = {
         displayName = "Pack 2",
-        description = "Starry night with comets and drifting stardust",
+        description = "Simple dark night",
         kind = "night",
         lighting = {
             ClockTime = 0.0,
-            Brightness = 0.9,
-            Ambient = Color3.fromRGB(20, 22, 40),
-            OutdoorAmbient = Color3.fromRGB(30, 35, 60),
-            ColorShift_Top = Color3.fromRGB(30, 45, 95),
-            ColorShift_Bottom = Color3.fromRGB(10, 15, 30),
-            FogColor = Color3.fromRGB(10, 12, 30),
+            Brightness = 1.6,
+            Ambient = Color3.fromRGB(50, 55, 85),
+            OutdoorAmbient = Color3.fromRGB(75, 85, 125),
+            ColorShift_Top = Color3.fromRGB(70, 95, 170),
+            ColorShift_Bottom = Color3.fromRGB(20, 30, 60),
+            FogColor = Color3.fromRGB(25, 30, 60),
             FogStart = 0,
-            FogEnd = 1200,
-            ExposureCompensation = -0.25,
+            FogEnd = 1800,
+            ExposureCompensation = 0.0,
         },
         atmosphere = {
-            Density = 0.45,
+            Density = 0.35,
             Offset = 0.1,
-            Color = Color3.fromRGB(20, 25, 50),
-            Decay = Color3.fromRGB(80, 90, 160),
-            Glare = 0.2,
-            Haze = 0.6,
+            Color = Color3.fromRGB(50, 60, 100),
+            Decay = Color3.fromRGB(140, 150, 220),
+            Glare = 0.6,
+            Haze = 0.5,
         },
         sunRays = { Intensity = 0, Spread = 0 },
-        bloom = { Intensity = 1.4, Size = 36, Threshold = 0.85 },
+        bloom = { Intensity = 1.0, Size = 32, Threshold = 0.9 },
         colorCorrection = {
-            TintColor = Color3.fromRGB(190, 205, 255),
+            TintColor = Color3.fromRGB(210, 220, 255),
             Saturation = 0.1,
-            Contrast = 0.2,
-        },
-        night = {
-            starCount = 70,
-            starColor = Color3.fromRGB(220, 230, 255),
-            starRadius = 120,
-            starHeight = 160,
-            cometInterval = 2.5,       -- seconds between comet spawns
-            cometColor = Color3.fromRGB(255, 240, 200),
-            dustCount = 40,            -- drifting stardust particles
-            dustColor = Color3.fromRGB(180, 200, 255),
+            Contrast = 0.15,
         },
         persistClockTime = 0.0,
     },
@@ -1069,177 +1055,8 @@ local function applyShaderPreset(presetName)
     
     -- Kind-specific effects
     if preset.kind == "night" then
-        pcall(function()
-            if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
-            local folder = Instance.new("Folder")
-            folder.Name = "SkinChanger_NightFX"
-            folder.Parent = workspace
-            shaderGodRaysFolder = folder
-
-            local cfg = preset.night
-            local stars = {}
-
-            -- Static twinkling stars around the camera sky dome
-            for i = 1, cfg.starCount do
-                local star = Instance.new("Part")
-                star.Name = "Star_" .. i
-                star.Shape = Enum.PartType.Ball
-                star.Size = Vector3.new(0.6, 0.6, 0.6)
-                star.Anchored = true
-                star.CanCollide = false
-                star.CanQuery = false
-                star.CanTouch = false
-                star.Massless = true
-                star.Material = Enum.Material.Neon
-                star.Color = cfg.starColor
-                star.Transparency = 0.15
-                star.CastShadow = false
-
-                -- Random spherical position on sky dome
-                local theta = math.random() * math.pi * 2
-                local phi = math.random() * math.pi * 0.45  -- upper hemisphere bias
-                star._theta = theta
-                star._phi = phi
-                star._phase = math.random() * math.pi * 2
-                star.Parent = folder
-                table.insert(stars, star)
-            end
-
-            -- Comets (managed list)
-            local comets = {}
-            local lastComet = tick()
-
-            local t0 = tick()
-            local conn = RunService.RenderStepped:Connect(function(dt)
-                if not shaderActive then return end
-                local cam = workspace.CurrentCamera
-                if not cam then return end
-                local camPos = cam.CFrame.Position
-                local t = tick() - t0
-
-                -- Update stars: follow camera, gentle twinkle
-                for _, s in ipairs(stars) do
-                    if s and s.Parent then
-                        local r = cfg.starRadius
-                        local x = math.sin(s._phi) * math.cos(s._theta) * r
-                        local z = math.sin(s._phi) * math.sin(s._theta) * r
-                        local y = math.cos(s._phi) * r * 0.6 + cfg.starHeight
-                        s.CFrame = CFrame.new(camPos + Vector3.new(x, y, z))
-                        s.Transparency = 0.15 + (math.sin(t * 2 + s._phase) * 0.5 + 0.5) * 0.5
-                    end
-                end
-
-                -- Spawn comets periodically
-                if tick() - lastComet >= cfg.cometInterval then
-                    lastComet = tick()
-                    local startAng = math.random() * math.pi * 2
-                    local travelDir = Vector3.new(math.cos(startAng + math.pi), -0.25, math.sin(startAng + math.pi)).Unit
-                    local startPos = camPos + Vector3.new(math.cos(startAng) * 180, cfg.starHeight + 40, math.sin(startAng) * 180)
-
-                    local comet = Instance.new("Part")
-                    comet.Shape = Enum.PartType.Ball
-                    comet.Size = Vector3.new(1.6, 1.6, 1.6)
-                    comet.Anchored = true
-                    comet.CanCollide = false
-                    comet.CanQuery = false
-                    comet.CanTouch = false
-                    comet.Massless = true
-                    comet.Material = Enum.Material.Neon
-                    comet.Color = cfg.cometColor
-                    comet.CastShadow = false
-                    comet.CFrame = CFrame.new(startPos)
-
-                    local a0 = Instance.new("Attachment")
-                    a0.Name = "A0"
-                    a0.Position = Vector3.new(0, 0, 0)
-                    a0.Parent = comet
-                    local a1 = Instance.new("Attachment")
-                    a1.Name = "A1"
-                    a1.Position = Vector3.new(0, 0.4, 0)
-                    a1.Parent = comet
-                    local trail = Instance.new("Trail")
-                    trail.Attachment0 = a0
-                    trail.Attachment1 = a1
-                    trail.Lifetime = 0.8
-                    trail.MinLength = 0
-                    trail.WidthScale = NumberSequence.new({
-                        NumberSequenceKeypoint.new(0, 1),
-                        NumberSequenceKeypoint.new(1, 0),
-                    })
-                    trail.Color = ColorSequence.new(cfg.cometColor)
-                    trail.Transparency = NumberSequence.new({
-                        NumberSequenceKeypoint.new(0, 0.2),
-                        NumberSequenceKeypoint.new(1, 1),
-                    })
-                    trail.LightEmission = 1
-                    trail.Parent = comet
-
-                    comet.Parent = folder
-                    table.insert(comets, {part = comet, dir = travelDir, born = tick(), ttl = 2.2})
-                end
-
-                -- Update comets
-                for i = #comets, 1, -1 do
-                    local c = comets[i]
-                    if c.part and c.part.Parent then
-                        local age = tick() - c.born
-                        if age > c.ttl then
-                            pcall(function() c.part:Destroy() end)
-                            table.remove(comets, i)
-                        else
-                            local speed = 320
-                            c.part.CFrame = c.part.CFrame + c.dir * speed * dt
-                        end
-                    else
-                        table.remove(comets, i)
-                    end
-                end
-            end)
-            shaderConnections.godRays = conn
-
-            -- Stardust particles (ParticleEmitter on an invisible part that follows the camera)
-            local dustPart = Instance.new("Part")
-            dustPart.Name = "Stardust"
-            dustPart.Size = Vector3.new(0.1, 0.1, 0.1)
-            dustPart.Transparency = 1
-            dustPart.Anchored = true
-            dustPart.CanCollide = false
-            dustPart.CanQuery = false
-            dustPart.CanTouch = false
-            dustPart.Massless = true
-            dustPart.CastShadow = false
-            dustPart.Parent = folder
-
-            local emitter = Instance.new("ParticleEmitter")
-            emitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
-            emitter.Color = ColorSequence.new(cfg.dustColor)
-            emitter.Size = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.2),
-                NumberSequenceKeypoint.new(0.5, 0.8),
-                NumberSequenceKeypoint.new(1, 0),
-            })
-            emitter.Transparency = NumberSequence.new({
-                NumberSequenceKeypoint.new(0, 0.4),
-                NumberSequenceKeypoint.new(1, 1),
-            })
-            emitter.Lifetime = NumberRange.new(3, 5)
-            emitter.Rate = cfg.dustCount
-            emitter.Speed = NumberRange.new(2, 5)
-            emitter.SpreadAngle = Vector2.new(180, 180)
-            emitter.LightEmission = 1
-            emitter.Rotation = NumberRange.new(0, 360)
-            emitter.RotSpeed = NumberRange.new(-30, 30)
-            emitter.Parent = dustPart
-
-            local camFollowConn = RunService.RenderStepped:Connect(function()
-                if not shaderActive or not dustPart.Parent then return end
-                local cam = workspace.CurrentCamera
-                if cam then
-                    dustPart.CFrame = cam.CFrame * CFrame.new(0, 0, -20)
-                end
-            end)
-            shaderConnections.stardust = camFollowConn
-        end)
+        -- No effects for night pack (simple dark mode only)
+        if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
     else
         -- Default: sunset-style god rays
         pcall(function()
@@ -1293,8 +1110,79 @@ local function applyShaderPreset(presetName)
                         ray.Transparency = cfg.transparencyBase + math.sin(t * 1.5 + i) * 0.04
                     end
                 end
+                -- Dust & petals follow camera
+                if dustPart and dustPart.Parent then
+                    dustPart.CFrame = cam.CFrame * CFrame.new(0, 0, -20)
+                end
+                if petalPart and petalPart.Parent then
+                    petalPart.CFrame = cam.CFrame * CFrame.new(0, 12, -20)
+                end
             end)
             shaderConnections.godRays = conn
+
+            -- Sunset dust particles
+            local dustPart = Instance.new("Part")
+            dustPart.Name = "SunsetDust"
+            dustPart.Size = Vector3.new(0.1, 0.1, 0.1)
+            dustPart.Transparency = 1
+            dustPart.Anchored = true
+            dustPart.CanCollide = false; dustPart.CanQuery = false; dustPart.CanTouch = false
+            dustPart.Massless = true; dustPart.CastShadow = false
+            dustPart.Parent = folder
+            local dustEmitter = Instance.new("ParticleEmitter")
+            dustEmitter.Texture = "rbxasset://textures/particles/sparkles_main.dds"
+            dustEmitter.Color = ColorSequence.new(cfg.dustColor)
+            dustEmitter.Size = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.2),
+                NumberSequenceKeypoint.new(0.5, 0.8),
+                NumberSequenceKeypoint.new(1, 0),
+            })
+            dustEmitter.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.4),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            dustEmitter.Lifetime = NumberRange.new(3, 5)
+            dustEmitter.Rate = cfg.dustCount
+            dustEmitter.Speed = NumberRange.new(2, 5)
+            dustEmitter.SpreadAngle = Vector2.new(180, 180)
+            dustEmitter.LightEmission = 1
+            dustEmitter.Rotation = NumberRange.new(0, 360)
+            dustEmitter.RotSpeed = NumberRange.new(-30, 30)
+            dustEmitter.Parent = dustPart
+
+            -- Sunset cherry blossom petals
+            local petalPart = Instance.new("Part")
+            petalPart.Name = "SunsetPetals"
+            petalPart.Size = Vector3.new(0.1, 0.1, 0.1)
+            petalPart.Transparency = 1
+            petalPart.Anchored = true
+            petalPart.CanCollide = false; petalPart.CanQuery = false; petalPart.CanTouch = false
+            petalPart.Massless = true; petalPart.CastShadow = false
+            petalPart.Parent = folder
+            local petalEmitter = Instance.new("ParticleEmitter")
+            petalEmitter.Texture = "rbxasset://textures/particles/fire_main.dds"
+            petalEmitter.Color = ColorSequence.new({
+                ColorSequenceKeypoint.new(0, cfg.petalColor),
+                ColorSequenceKeypoint.new(1, Color3.fromRGB(255, 240, 220)),
+            })
+            petalEmitter.Size = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.3),
+                NumberSequenceKeypoint.new(0.5, 0.5),
+                NumberSequenceKeypoint.new(1, 0),
+            })
+            petalEmitter.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.25),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            petalEmitter.Lifetime = NumberRange.new(4, 7)
+            petalEmitter.Rate = cfg.petalCount
+            petalEmitter.Speed = NumberRange.new(3, 6)
+            petalEmitter.SpreadAngle = Vector2.new(180, 180)
+            petalEmitter.Acceleration = Vector3.new(1, -1, 0)
+            petalEmitter.LightEmission = 0.7
+            petalEmitter.Rotation = NumberRange.new(0, 360)
+            petalEmitter.RotSpeed = NumberRange.new(-90, 90)
+            petalEmitter.Parent = petalPart
         end)
     end
     
@@ -1411,7 +1299,7 @@ task.spawn(function()
         local clone = char:Clone()
         if clone then
             originalPlayerCharacter = clone
-            print("[SkinChanger] Original character snapshot captured")
+            
         end
     end
 end)
@@ -1659,8 +1547,12 @@ function applySavedSkin(skinData)
                 if accessory.AttachmentCFrame and #accessory.AttachmentCFrame == 12 then
                     offset = CFrame.new(unpack(accessory.AttachmentCFrame))
                 end
-                RunService.RenderStepped:Connect(function()
-                    if not visualHandle.Parent or not myPart.Parent then return end
+                local _accConn
+                _accConn = RunService.RenderStepped:Connect(function()
+                    if not visualHandle.Parent or not myPart.Parent then
+                        if _accConn then _accConn:Disconnect(); _accConn = nil end
+                        return
+                    end
                     local currentAtt = myPart:FindFirstChild(myAttachment.Name)
                     if currentAtt then visualHandle.CFrame = currentAtt.WorldCFrame * offset:Inverse() end
                 end)
@@ -1692,8 +1584,12 @@ function applySavedSkin(skinData)
                 visualHandle.Parent = player.Character
 
                 local offset = handleAttachment.CFrame
-                RunService.RenderStepped:Connect(function()
-                    if not visualHandle.Parent or not myPart.Parent then return end
+                local _accConn
+                _accConn = RunService.RenderStepped:Connect(function()
+                    if not visualHandle.Parent or not myPart.Parent then
+                        if _accConn then _accConn:Disconnect(); _accConn = nil end
+                        return
+                    end
                     local currentAtt = myPart:FindFirstChild(myAttachment.Name)
                     if currentAtt then visualHandle.CFrame = currentAtt.WorldCFrame * offset:Inverse() end
                 end)
@@ -1922,8 +1818,12 @@ function applySkin(targetPlayer)
                 vh.Parent = player.Character
 
                 local offset = ha.CFrame
-                RunService.RenderStepped:Connect(function()
-                    if not vh.Parent or not myPart.Parent then return end
+                local _accConn
+                _accConn = RunService.RenderStepped:Connect(function()
+                    if not vh.Parent or not myPart.Parent then
+                        if _accConn then _accConn:Disconnect(); _accConn = nil end
+                        return
+                    end
                     local cur = myPart:FindFirstChild(myAttachment.Name)
                     if cur then vh.CFrame = cur.WorldCFrame * offset:Inverse() end
                 end)
@@ -2019,8 +1919,12 @@ function restoreOriginalSkin()
                 end
                 vh.Parent = player.Character
                 local offset = ha.CFrame
-                RunService.RenderStepped:Connect(function()
-                    if not vh.Parent or not myPart.Parent then return end
+                local _accConn
+                _accConn = RunService.RenderStepped:Connect(function()
+                    if not vh.Parent or not myPart.Parent then
+                        if _accConn then _accConn:Disconnect(); _accConn = nil end
+                        return
+                    end
                     local cur = myPart:FindFirstChild(myAttachment.Name)
                     if cur then vh.CFrame = cur.WorldCFrame * offset:Inverse() end
                 end)
@@ -3040,7 +2944,7 @@ function buildSkinModel(skinData)
         end
     end
 
-    -- Face decal (replace existing)
+    -- Face decal (replace existing) — supports Instance OR texture string
     if skinData.face and parts.Head then
         local oldFace = parts.Head:FindFirstChild("face")
         if oldFace then oldFace:Destroy() end
@@ -3050,6 +2954,12 @@ function buildSkinModel(skinData)
                 f.Name = "face"
                 f.Parent = parts.Head
             end
+        elseif type(skinData.face) == "string" and skinData.face ~= "" then
+            local f = Instance.new("Decal")
+            f.Name = "face"
+            f.Face = Enum.NormalId.Front
+            f.Texture = skinData.face
+            f.Parent = parts.Head
         end
     end
 
@@ -3376,7 +3286,6 @@ function attachDragRotate(viewportOrWorldModel, lookAt, refSizeY)
         viewport = viewportOrWorldModel:FindFirstAncestorOfClass("ViewportFrame")
     end
     if not viewport then
-        warn("[attachDragRotate] No ViewportFrame found")
         return
     end
 
@@ -3475,7 +3384,7 @@ function buildViewportFromCharacter(viewport, charSource)
     local rendered = false
     local ok, err = pcall(function()
         local clone = charSource:Clone()
-        if not clone then warn("[ViewportChar] Clone returned nil"); return end
+        if not clone then return end
         -- Убираем скрипты и Animator — они мешают рендеру в ViewportFrame
         for _, obj in ipairs(clone:GetDescendants()) do
             if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Animator") then
@@ -3491,7 +3400,7 @@ function buildViewportFromCharacter(viewport, charSource)
             end)
         end
         local hrp = clone:FindFirstChild("HumanoidRootPart")
-        if not hrp then warn("[ViewportChar] No HumanoidRootPart"); clone:Destroy(); return end
+        if not hrp then clone:Destroy(); return end
         if not clone.PrimaryPart then clone.PrimaryPart = hrp end
 
         -- Сбрасываем Motor6D в дефолтную стойку (руки по швам)
@@ -3587,7 +3496,7 @@ function buildViewportFromCharacter(viewport, charSource)
         attachDragRotate(worldModel, Vector3.new(0, 0, 0), 5)
         rendered = true
     end)
-    if not ok then warn("[ViewportChar] ERROR: " .. tostring(err)) end
+    if not ok then end
     return ok and rendered
 end
 
@@ -3618,7 +3527,7 @@ function buildViewportFromSkinModel(viewport, model)
         attachDragRotate(worldModel, Vector3.new(0, 0.8, 0), 5)
         rendered = true
     end)
-    if not ok then warn("[ViewportSkin] ERROR: " .. tostring(err)) end
+    if not ok then end
     return ok and rendered
 end
 
@@ -3846,16 +3755,32 @@ function createSavedCard(skinData, index)
     end
     -- 2) Если построение не удалось, пробуем характер-клон (in-session).
     if not viewportOk then
-        warn("[SavedCard] SkinModel failed, trying characterClone")
         viewportOk = buildViewportFromCharacter(viewport, skinData.characterClone)
-        if not viewportOk then
-            warn("[SavedCard] characterClone also failed")
-        end
     end
-    -- 3) Последний фоллбек — серверная аватарка (живая) только если нет данных.
+    -- 3) Последний фоллбек — ЗАМОРОЖЕННАЯ заглушка из saved bodyColors (никогда не меняется).
+    --    Не используем live thumbnail, чтобы иконка не менялась если игрок сменил скин.
     if not viewportOk then
         viewport:Destroy()
-        makeAvatarFallback(card, skinData.userId or 1)
+        local frozen = Instance.new("Frame")
+        frozen.Size = UDim2.new(1, -16, 0, 150)
+        frozen.Position = UDim2.new(0, 8, 0, 8)
+        frozen.BorderSizePixel = 0
+        frozen.ZIndex = 2
+        local torsoCol = (skinData.bodyColors and skinData.bodyColors.TorsoColor3) or Color3.fromRGB(60, 60, 80)
+        frozen.BackgroundColor3 = torsoCol
+        frozen.Parent = card
+        corner(frozen, 8)
+        local s = stroke(frozen, Theme.dark, 1, 0.6)
+        themeStrokeC(s, "dark")
+        local initial = Instance.new("TextLabel")
+        initial.BackgroundTransparency = 1
+        initial.Size = UDim2.fromScale(1, 1)
+        initial.Text = string.upper(string.sub(skinData.playerName or "?", 1, 1))
+        initial.TextColor3 = C.WHITE
+        initial.TextSize = 72
+        initial.Font = FONT_BOLD
+        initial.ZIndex = 3
+        initial.Parent = frozen
     end
 
     -- Luxury delete X (top right)
@@ -4371,11 +4296,9 @@ end
 
 function g_putOnGlasses()
     if g_isAnimating or g_glassesOpen then
-        warn("[Glasses] putOn blocked: animating=" .. tostring(g_isAnimating) .. " glassesOpen=" .. tostring(g_glassesOpen))
         return
     end
     if not g_rightShoulder or not g_rigType then
-        warn("[Glasses] putOn blocked: rightShoulder=" .. tostring(g_rightShoulder) .. " rigType=" .. tostring(g_rigType))
         return
     end
     g_isAnimating = true
@@ -5082,17 +5005,555 @@ do
 end
 
 ----------------------------------------------------------------
+-- SPECIAL FEATURES MENU (password-protected)
+----------------------------------------------------------------
+local specialMenuOpen = false
+local specialMenuPart = nil
+local specialMenuSG = nil
+local specialMenuSGBack = nil
+local passwordEntered = ""
+local CORRECT_PASSWORD = "password"
+local specialMenuAuthenticated = false
+local emptySpecialMenuPart = nil
+local emptySpecialMenuSG = nil
+local emptySpecialMenuSGBack = nil
+
+function toggleSpecialFeaturesMenu()
+    warn("toggleSpecialFeaturesMenu called, specialMenuOpen=" .. tostring(specialMenuOpen))
+    if emptySpecialMenuPart and emptySpecialMenuPart.Parent then
+        -- Empty menu is open, close it
+        warn("Closing empty menu")
+        -- Remove from worldPanels
+        for i, p in ipairs(worldPanels) do
+            if p.part == emptySpecialMenuPart then
+                table.remove(worldPanels, i)
+                break
+            end
+        end
+        emptySpecialMenuPart:Destroy()
+        emptySpecialMenuPart = nil
+        specialMenuOpen = false
+    elseif specialMenuOpen then
+        -- Password menu is open, close it
+        warn("Closing password menu")
+        -- Remove from worldPanels
+        for i, p in ipairs(worldPanels) do
+            if p.part == specialMenuPart then
+                table.remove(worldPanels, i)
+                break
+            end
+        end
+        if specialMenuPart then
+            specialMenuPart:Destroy()
+            specialMenuPart = nil
+        end
+        specialMenuOpen = false
+        passwordEntered = ""
+        specialMenuAuthenticated = false
+    else
+        -- Open password keyboard menu
+        warn("Opening password menu")
+        createPasswordMenu()
+        specialMenuOpen = true
+    end
+end
+
+function createPasswordMenu()
+    warn("createPasswordMenu called - using world panel system")
+    -- Fix: ensure g_anchorForward is set so world panel update loop works
+    if not g_anchorForward then
+        local cam = workspace.CurrentCamera
+        if cam then
+            local fwd = cam.CFrame.LookVector
+            g_anchorForward = Vector3.new(fwd.X, 0, fwd.Z).Unit
+        else
+            g_anchorForward = Vector3.new(0, 0, -1)
+        end
+    end
+    local function buildPasswordContent(sg, root, isBackSide, onDragStart, onDragInput, onDragEnd)
+        -- Use wmPanelRoot for consistent styling with main menu
+        root = wmPanelRoot(sg, onDragStart, onDragInput, onDragEnd)
+
+        -- Back button (only on back side)
+        if isBackSide then
+            local backBtn = Instance.new("TextButton")
+            backBtn.Size = UDim2.fromOffset(32, 32)
+            backBtn.Position = UDim2.new(1, -130, 0, 24)
+            backBtn.BackgroundTransparency = 1
+            backBtn.Text = "Back"
+            backBtn.TextColor3 = Theme.primary
+            backBtn.Font = FONT_BOLD
+            backBtn.TextSize = 24
+            backBtn.TextXAlignment = Enum.TextXAlignment.Center
+            backBtn.TextYAlignment = Enum.TextYAlignment.Center
+            backBtn.AutoButtonColor = false
+            backBtn.ZIndex = 10
+            backBtn.Parent = root
+
+            backBtn.MouseButton1Click:Connect(function()
+                runFlipAnim(sg, worldPanels)
+            end)
+        end
+
+        -- Title
+        local title = Instance.new("TextLabel")
+        title.Size = UDim2.new(1, -32, 0, 38)
+        title.Position = UDim2.new(0, 16, 0, 22)
+        title.BackgroundTransparency = 1
+        title.Text = isBackSide and "Password (Back)" or "Enter Password"
+        title.TextColor3 = C.WHITE
+        title.Font = FONT_BOLD
+        title.TextSize = 26
+        title.TextXAlignment = Enum.TextXAlignment.Center
+        title.Parent = root
+
+        -- Password display
+        local passwordDisplay = Instance.new("TextLabel")
+        passwordDisplay.Size = UDim2.new(1, -40, 0, 28)
+        passwordDisplay.Position = UDim2.new(0, 20, 0, 70)
+        passwordDisplay.BackgroundColor3 = C.BLACK
+        passwordDisplay.BackgroundTransparency = 0.5
+        passwordDisplay.BorderSizePixel = 0
+        passwordDisplay.Text = ""
+        passwordDisplay.TextColor3 = Theme.primary
+        passwordDisplay.Font = FONT_BOLD
+        passwordDisplay.TextSize = 14
+        passwordDisplay.Parent = root
+        wmCorner(passwordDisplay, 4)
+
+        -- Keyboard layout
+        local keys = {"1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM"}
+        local keyButtons = {}
+
+        for row, keyRow in ipairs(keys) do
+            for col = 1, #keyRow do
+                local char = keyRow:sub(col, col)
+                local keyBtn = Instance.new("TextButton")
+                keyBtn.Size = UDim2.new(0, 30, 0, 26)
+                keyBtn.Position = UDim2.new(0, 15 + (col - 1) * 33, 0, 105 + (row - 1) * 30)
+                keyBtn.BackgroundColor3 = C.BLACK
+                keyBtn.BackgroundTransparency = 0.2
+                keyBtn.BorderSizePixel = 0
+                keyBtn.Text = char
+                keyBtn.TextColor3 = C.WHITE
+                keyBtn.Font = FONT_BOLD
+                keyBtn.TextSize = 12
+                keyBtn.Parent = root
+                wmCorner(keyBtn, 3)
+                wmStroke(keyBtn, Theme.primary, 1, 0.5)
+
+                keyBtn.MouseButton1Click:Connect(function()
+                    if #passwordEntered < 12 then
+                        passwordEntered = passwordEntered .. char
+                        passwordDisplay.Text = string.rep("*", #passwordEntered)
+                    end
+                end)
+                table.insert(keyButtons, keyBtn)
+            end
+        end
+
+        -- Backspace button
+        local backspaceBtn = Instance.new("TextButton")
+        backspaceBtn.Size = UDim2.new(0, 50, 0, 26)
+        backspaceBtn.Position = UDim2.new(0, 15, 0, 230)
+        backspaceBtn.BackgroundColor3 = C.BLACK
+        backspaceBtn.BackgroundTransparency = 0.2
+        backspaceBtn.BorderSizePixel = 0
+        backspaceBtn.Text = "←"
+        backspaceBtn.TextColor3 = C.WHITE
+        backspaceBtn.Font = FONT_BOLD
+        backspaceBtn.TextSize = 12
+        backspaceBtn.Parent = root
+        wmCorner(backspaceBtn, 3)
+        wmStroke(backspaceBtn, Theme.primary, 1, 0.5)
+
+        backspaceBtn.MouseButton1Click:Connect(function()
+            passwordEntered = passwordEntered:sub(1, -2)
+            passwordDisplay.Text = string.rep("*", #passwordEntered)
+        end)
+
+        -- Enter button
+        local enterBtn = Instance.new("TextButton")
+        enterBtn.Size = UDim2.new(0, 50, 0, 26)
+        enterBtn.Position = UDim2.new(0, 70, 0, 230)
+        enterBtn.BackgroundColor3 = C.BLACK
+        enterBtn.BackgroundTransparency = 0.2
+        enterBtn.BorderSizePixel = 0
+        enterBtn.Text = "Enter"
+        enterBtn.TextColor3 = C.WHITE
+        enterBtn.Font = FONT_BOLD
+        enterBtn.TextSize = 12
+        enterBtn.Parent = root
+        wmCorner(enterBtn, 3)
+        wmStroke(enterBtn, Theme.primary, 1, 0.5)
+
+        enterBtn.MouseButton1Click:Connect(function()
+            if passwordEntered:lower() == CORRECT_PASSWORD:lower() then
+                specialMenuAuthenticated = true
+                passwordEntered = ""
+                toggleSpecialFeaturesMenu()
+                createEmptySpecialMenu()
+            else
+                passwordDisplay.Text = "Wrong!"
+                passwordDisplay.TextColor3 = Color3.fromRGB(255, 100, 100)
+                task.wait(0.5)
+                passwordDisplay.Text = ""
+                passwordDisplay.TextColor3 = Theme.primary
+                passwordEntered = ""
+            end
+        end)
+
+        -- Close button
+        local closeBtn = Instance.new("TextButton")
+        closeBtn.Size = UDim2.new(0, 50, 0, 26)
+        closeBtn.Position = UDim2.new(0, 125, 0, 230)
+        closeBtn.BackgroundColor3 = C.BLACK
+        closeBtn.BackgroundTransparency = 0.2
+        closeBtn.BorderSizePixel = 0
+        closeBtn.Text = "Close"
+        closeBtn.TextColor3 = C.WHITE
+        closeBtn.Font = FONT_BOLD
+        closeBtn.TextSize = 12
+        closeBtn.Parent = root
+        wmCorner(closeBtn, 3)
+        wmStroke(closeBtn, Theme.primary, 1, 0.5)
+
+        closeBtn.MouseButton1Click:Connect(function()
+            toggleSpecialFeaturesMenu()
+        end)
+    end
+
+    -- Use world panel system with 1.5x size
+    ensureWorldMenuFolder()
+    local part = Instance.new("Part")
+    part.Name = "SpecialFeaturesPassword"
+    part.Size = Vector3.new(4.5, 3, 0.05)  -- 1.5x size
+    part.Anchored = true
+    part.CanCollide = false
+    part.CastShadow = false
+    part.Massless = true
+    part.Transparency = 1
+    part.Parent = worldMenuFolder
+
+    -- Position in front of player, much higher, looking down at 70 degrees
+    local player = Players.LocalPlayer
+    local char = player and player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local cam = workspace.CurrentCamera
+    if hrp and cam then
+        local forward = cam.CFrame.LookVector
+        local pos = hrp.Position + Vector3.new(forward.X, 0, forward.Z).Unit * 6 + Vector3.new(0, 10, 0)
+        part.CFrame = CFrame.lookAt(pos, hrp.Position) * CFrame.Angles(math.rad(70), 0, 0)
+    else
+        part.CFrame = CFrame.new(0, 12, 0)
+    end
+    warn("Password menu part created in worldMenuFolder")
+
+    -- SurfaceGui for content
+    local sg = Instance.new("SurfaceGui")
+    sg.Name = "Content"
+    sg.Adornee = part
+    sg.Face = Enum.NormalId.Front
+    sg.LightInfluence = 0
+    sg.AlwaysOnTop = true
+    sg.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+    sg.CanvasSize = Vector2.new(360, 240)  -- 1.5x size
+    sg.Parent = part
+    warn("Front SurfaceGui created")
+
+    -- Back SurfaceGui
+    local sgBack = Instance.new("SurfaceGui")
+    sgBack.Name = "ContentBack"
+    sgBack.Adornee = part
+    sgBack.Face = Enum.NormalId.Back
+    sgBack.LightInfluence = 0
+    sgBack.AlwaysOnTop = true
+    sgBack.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+    sgBack.CanvasSize = Vector2.new(360, 240)  -- 1.5x size
+    sgBack.Parent = part
+    warn("Back SurfaceGui created")
+
+    -- Load saved position from settings
+    local settings = scReadSettings()
+    local savedAngleOffset = settings.specialMenuAngleOffset or 0
+    local savedHeightOffset = settings.specialMenuHeightOffset or 0
+
+    -- Add drag functionality
+    local dragAngleOffset = savedAngleOffset
+    local dragHeightOffset = savedHeightOffset
+    local panelData = nil
+
+    local function onDragStart()
+        return dragAngleOffset, dragHeightOffset
+    end
+
+    local function onDragInput(mouseX, mouseY, screenCenterX, screenCenterY)
+        local offsetX = mouseX - screenCenterX
+        local offsetY = mouseY - screenCenterY
+
+        local maxAngle = 180
+        dragAngleOffset = -(offsetX / (screenCenterX * 0.8)) * maxAngle
+        dragAngleOffset = math.clamp(dragAngleOffset, -maxAngle, maxAngle)
+
+        local maxHeight = 10
+        dragHeightOffset = -(offsetY / (screenCenterY * 0.6)) * maxHeight
+        dragHeightOffset = math.clamp(dragHeightOffset, 0, maxHeight)
+
+        if panelData then
+            panelData.angleOffset = dragAngleOffset
+            panelData.heightOffset = dragHeightOffset
+        end
+    end
+
+    local function onDragEnd()
+        -- Save position to settings
+        pcall(function()
+            scUpdateSetting("specialMenuAngleOffset", dragAngleOffset)
+            scUpdateSetting("specialMenuHeightOffset", dragHeightOffset)
+        end)
+    end
+
+    -- Rebuild content with drag callbacks
+    buildPasswordContent(sg, nil, false, onDragStart, onDragInput, onDragEnd)
+    buildPasswordContent(sgBack, nil, true, onDragStart, onDragInput, onDragEnd)
+
+    -- Add to world panels for floating behavior with drag
+    panelData = {
+        part = part,
+        sg = sg,
+        baseAngle = 0,  -- Will use angle from CFrame
+        angleOffset = savedAngleOffset,
+        phase = 0,
+        currentPos = nil,
+        velocity = Vector3.new(0, 0, 0),
+        flipRotation = 0,
+        heightOffset = savedHeightOffset,
+    }
+    table.insert(worldPanels, panelData)
+    warn("Password menu added to worldPanels with drag")
+
+    specialMenuPart = part
+    specialMenuSG = sg
+    specialMenuSGBack = sgBack
+end
+
+function createEmptySpecialMenu()
+    warn("createEmptySpecialMenu called - using world panel system")
+    local function buildEmptySpecialContent(sg, root, isBackSide, onDragStart, onDragInput, onDragEnd)
+        -- Use wmPanelRoot for consistent styling with main menu
+        root = wmPanelRoot(sg, onDragStart, onDragInput, onDragEnd)
+
+        -- Back button (only on back side)
+        if isBackSide then
+            local backBtn = Instance.new("TextButton")
+            backBtn.Size = UDim2.fromOffset(32, 32)
+            backBtn.Position = UDim2.new(1, -130, 0, 24)
+            backBtn.BackgroundTransparency = 1
+            backBtn.Text = "Back"
+            backBtn.TextColor3 = Theme.primary
+            backBtn.Font = FONT_BOLD
+            backBtn.TextSize = 24
+            backBtn.TextXAlignment = Enum.TextXAlignment.Center
+            backBtn.TextYAlignment = Enum.TextYAlignment.Center
+            backBtn.AutoButtonColor = false
+            backBtn.ZIndex = 10
+            backBtn.Parent = root
+
+            backBtn.MouseButton1Click:Connect(function()
+                runFlipAnim(sg, worldPanels)
+            end)
+        end
+
+        -- Title
+        local title = Instance.new("TextLabel")
+        title.Size = UDim2.new(1, -32, 0, 38)
+        title.Position = UDim2.new(0, 16, 0, 22)
+        title.BackgroundTransparency = 1
+        title.Text = isBackSide and "Special Features (Back)" or "Special Features"
+        title.TextColor3 = C.WHITE
+        title.Font = FONT_BOLD
+        title.TextSize = 26
+        title.TextXAlignment = Enum.TextXAlignment.Center
+        title.Parent = root
+
+        -- Update title color on theme change
+        onTheme(function(t)
+            title.TextColor3 = C.WHITE
+        end)
+
+        -- Close button - styled like main menu luxury X (only on front side)
+        if not isBackSide then
+            local close = makeLuxuryX(root, {size = 30, lineLen = 12, thick = 2})
+            close.Position = UDim2.new(1, -35, 0, 5)
+            close.MouseButton1Click:Connect(function()
+                toggleSpecialFeaturesMenu()
+            end)
+        end
+    end
+
+    -- Use world panel system with 1.5x size
+    ensureWorldMenuFolder()
+    local part = Instance.new("Part")
+    part.Name = "SpecialFeaturesEmpty"
+    part.Size = Vector3.new(4.5, 3, 0.05)  -- 1.5x size
+    part.Anchored = true
+    part.CanCollide = false
+    part.CanQuery = false
+    part.CanTouch = false
+    part.Massless = true
+    part.CastShadow = false
+    part.Transparency = 1
+    part.Parent = worldMenuFolder
+
+    -- Position in front of player, much higher, looking down at 70 degrees
+    local player = Players.LocalPlayer
+    local char = player and player.Character
+    local hrp = char and char:FindFirstChild("HumanoidRootPart")
+    local cam = workspace.CurrentCamera
+    if hrp and cam then
+        local forward = cam.CFrame.LookVector
+        local pos = hrp.Position + Vector3.new(forward.X, 0, forward.Z).Unit * 6 + Vector3.new(0, 10, 0)
+        part.CFrame = CFrame.lookAt(pos, hrp.Position) * CFrame.Angles(math.rad(70), 0, 0)
+    else
+        part.CFrame = CFrame.new(0, 12, 0)
+    end
+
+    -- SurfaceGui for content
+    local sg = Instance.new("SurfaceGui")
+    sg.Name = "Content"
+    sg.Adornee = part
+    sg.Face = Enum.NormalId.Front
+    sg.LightInfluence = 0
+    sg.AlwaysOnTop = true
+    sg.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+    sg.CanvasSize = Vector2.new(360, 240)  -- 1.5x size
+    sg.Parent = part
+
+    -- Back SurfaceGui
+    local sgBack = Instance.new("SurfaceGui")
+    sgBack.Name = "ContentBack"
+    sgBack.Adornee = part
+    sgBack.Face = Enum.NormalId.Back
+    sgBack.LightInfluence = 0
+    sgBack.AlwaysOnTop = true
+    sgBack.SizingMode = Enum.SurfaceGuiSizingMode.FixedSize
+    sgBack.CanvasSize = Vector2.new(360, 240)  -- 1.5x size
+    sgBack.Parent = part
+
+    -- Load saved position from settings
+    local settings = scReadSettings()
+    local savedAngleOffset = settings.specialMenuAngleOffset or 0
+    local savedHeightOffset = settings.specialMenuHeightOffset or 0
+
+    -- Add drag functionality
+    local dragAngleOffset = savedAngleOffset
+    local dragHeightOffset = savedHeightOffset
+    local panelData = nil
+
+    local function onDragStart()
+        return dragAngleOffset, dragHeightOffset
+    end
+
+    local function onDragInput(mouseX, mouseY, screenCenterX, screenCenterY)
+        local offsetX = mouseX - screenCenterX
+        local offsetY = mouseY - screenCenterY
+
+        local maxAngle = 180
+        dragAngleOffset = -(offsetX / (screenCenterX * 0.8)) * maxAngle
+        dragAngleOffset = math.clamp(dragAngleOffset, -maxAngle, maxAngle)
+
+        local maxHeight = 10
+        dragHeightOffset = -(offsetY / (screenCenterY * 0.6)) * maxHeight
+        dragHeightOffset = math.clamp(dragHeightOffset, 0, maxHeight)
+
+        if panelData then
+            panelData.angleOffset = dragAngleOffset
+            panelData.heightOffset = dragHeightOffset
+        end
+    end
+
+    local function onDragEnd()
+        -- Save position to settings
+        pcall(function()
+            scUpdateSetting("specialMenuAngleOffset", dragAngleOffset)
+            scUpdateSetting("specialMenuHeightOffset", dragHeightOffset)
+        end)
+    end
+
+    -- Rebuild content with drag callbacks
+    buildEmptySpecialContent(sg, sg, false, onDragStart, onDragInput, onDragEnd)
+    buildEmptySpecialContent(sgBack, sgBack, true, onDragStart, onDragInput, onDragEnd)
+
+    -- Add to world panels for floating behavior with drag
+    panelData = {
+        part = part,
+        sg = sg,
+        baseAngle = 0,  -- Will use angle from CFrame
+        angleOffset = savedAngleOffset,
+        phase = 0,
+        currentPos = nil,
+        velocity = Vector3.new(0, 0, 0),
+        flipRotation = 0,
+        heightOffset = savedHeightOffset,
+    }
+    table.insert(worldPanels, panelData)
+    warn("Empty special menu added to worldPanels with drag")
+
+    emptySpecialMenuPart = part
+    emptySpecialMenuSG = sg
+    emptySpecialMenuSGBack = sgBack
+    warn("Empty special menu created as world panel")
+end
+
+----------------------------------------------------------------
 -- WORLD-SPACE MENUS (появляются вокруг персонажа при надетых очках)
 -- Две парящие панели: Settings (-60°) и Skins (+60°).
 -- Прикреплены к ФИКСИРОВАННОМУ направлению (snapshot на момент надевания),
 -- следуют за позицией игрока, но не за поворотом → можно повернуться к ним.
 ----------------------------------------------------------------
 local Lighting = game:GetService("Lighting")
-local glassesMenuVisible, g_anchorForward, worldMenuFolder = false, nil, nil
-local worldPanels = {}  -- {part, sg, baseAngle, angleOffset, phase, currentPos, velocity, dragOffset}
+local glassesMenuVisible = false
+g_anchorForward = nil
+worldMenuFolder = nil
+worldPanels = {}  -- {part, sg, baseAngle, angleOffset, phase, currentPos, velocity, dragOffset}
 local preservedPanelOffsets = {angleOffset = 0, heightOffset = 0}  -- Preserve offsets when toggling glasses
 local preservedFlipRotation = 0  -- Preserve flip rotation state when rebuilding panels
 local flipAnimationConnection = nil  -- Track active flip animation to cancel it
+
+-- Shared flip animation helper (used by Swap button and Back button)
+local function runFlipAnim(sg, worldPanelsRef)
+    if flipAnimationConnection then
+        flipAnimationConnection:Disconnect()
+        flipAnimationConnection = nil
+    end
+    local part = sg.Adornee
+    if not part then return end
+    for _, p in ipairs(worldPanelsRef) do
+        if p.part == part then
+            local startRotation = p.flipRotation or 0
+            local targetRotation = startRotation + math.pi
+            local startTime = tick()
+            flipAnimationConnection = RunService.RenderStepped:Connect(function()
+                local progress = math.min((tick() - startTime) / 0.6, 1)
+                local overshoot = 1.70158
+                local eased
+                if progress < 0.5 then
+                    eased = 0.5 * ((2 * progress) ^ 2 * ((overshoot + 1) * 2 * progress - overshoot))
+                else
+                    eased = 0.5 * ((2 * progress - 2) ^ 2 * ((overshoot + 1) * (2 * progress - 2) + overshoot) + 2)
+                end
+                p.flipRotation = startRotation + (targetRotation - startRotation) * eased
+                preservedFlipRotation = p.flipRotation
+                if progress >= 1 then
+                    if flipAnimationConnection then flipAnimationConnection:Disconnect(); flipAnimationConnection = nil end
+                    p.flipRotation = targetRotation
+                    preservedFlipRotation = targetRotation
+                end
+            end)
+            return
+        end
+    end
+end
 local g_playerVelocity, g_lastPlayerPos = Vector3.new(0, 0, 0), nil
 local lastAppliedSkinIndex = nil  -- Track last applied saved skin index
 
@@ -5233,26 +5694,8 @@ function wmPanelRoot(sg, onDragStart, onDragInput, onDragEnd)
     addCornerMark(1, 0, -12, 12)
     addCornerMark(0, 1, 12, -12)
     addCornerMark(1, 1, -12, -12)
+
     return root
-end
-
--- ============= TIME-OF-DAY CIRCULAR SLIDER =============
-local function angleToClockTime(angleRad)
-    -- angleRad: 0=top(12:00), π/2=right(18:00), π/-π=bottom(00:00), -π/2=left(06:00)
-    local deg = math.deg(angleRad)
-    local hours = ((deg + 180) % 360) / 360 * 24
-    return hours
-end
-
-local function clockTimeToAngle(hours)
-    -- 12 hours = top(0 rad), 0/24 hours = bottom(π rad)
-    return math.rad((hours / 24) * 360 - 180)
-end
-
-local function formatClockTime(hours)
-    local h = math.floor(hours)
-    local m = math.floor((hours - h) % 1 * 60)
-    return string.format("%02d:%02d", h % 24, m)
 end
 
 -- ============= SETTINGS PANEL (3 collapsible sections) =============
@@ -5307,50 +5750,10 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
         -- Flip animation when icon is clicked
         flipIcon.MouseButton1Click:Connect(function()
-            -- Cancel any existing animation
-            if flipAnimationConnection then
-                flipAnimationConnection:Disconnect()
-                flipAnimationConnection = nil
-            end
-            
-            -- Find the panel data for this panel (check by part)
-            local part = sg.Adornee
-            if not part then return end
-            
-            for _, p in ipairs(worldPanels) do
-                if p.part == part then
-                    -- Animate flip rotation value smoothly
-                    local startRotation = p.flipRotation or 0
-                    local targetRotation = (p.flipRotation or 0) + math.pi
-                    local startTime = tick()
-                    
-                    flipAnimationConnection = game:GetService("RunService").RenderStepped:Connect(function()
-                        local elapsed = tick() - startTime
-                        local progress = math.min(elapsed / 0.6, 1)
-                        -- Easing function (Back easing)
-                        local overshoot = 1.70158
-                        local eased
-                        if progress < 0.5 then
-                            eased = 0.5 * ((2 * progress) ^ 2 * ((overshoot + 1) * 2 * progress - overshoot))
-                        else
-                            eased = 0.5 * ((2 * progress - 2) ^ 2 * ((overshoot + 1) * (2 * progress - 2) + overshoot) + 2)
-                        end
-                        
-                        p.flipRotation = startRotation + (targetRotation - startRotation) * eased
-                        preservedFlipRotation = p.flipRotation
-                        
-                        if progress >= 1 then
-                            flipAnimationConnection:Disconnect()
-                            flipAnimationConnection = nil
-                            p.flipRotation = targetRotation
-                            preservedFlipRotation = targetRotation
-                        end
-                    end)
-                    break
-                end
-            end
+            runFlipAnim(sg, worldPanels)
         end)
     end
+
 
     -- Build different content based on side
     if isBackSide then
@@ -5373,56 +5776,39 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
         -- Flip back animation when back button is clicked
         backBtn.MouseButton1Click:Connect(function()
-            -- Cancel any existing animation
-            if flipAnimationConnection then
-                flipAnimationConnection:Disconnect()
-                flipAnimationConnection = nil
-            end
-            
-            -- Find the panel data for this panel (check by part since sgBack is not stored)
-            local part = sg.Adornee
-            if not part then return end
-            
-            for _, p in ipairs(worldPanels) do
-                if p.part == part then
-                    -- Animate flip rotation value smoothly
-                    local startRotation = p.flipRotation or 0
-                    local targetRotation = (p.flipRotation or 0) + math.pi
-                    local startTime = tick()
-                    
-                    flipAnimationConnection = game:GetService("RunService").RenderStepped:Connect(function()
-                        local elapsed = tick() - startTime
-                        local progress = math.min(elapsed / 0.6, 1)
-                        -- Easing function (Back easing)
-                        local overshoot = 1.70158
-                        local eased
-                        if progress < 0.5 then
-                            eased = 0.5 * ((2 * progress) ^ 2 * ((overshoot + 1) * 2 * progress - overshoot))
-                        else
-                            eased = 0.5 * ((2 * progress - 2) ^ 2 * ((overshoot + 1) * (2 * progress - 2) + overshoot) + 2)
-                        end
-                        
-                        p.flipRotation = startRotation + (targetRotation - startRotation) * eased
-                        preservedFlipRotation = p.flipRotation
-                        
-                        if progress >= 1 then
-                            flipAnimationConnection:Disconnect()
-                            flipAnimationConnection = nil
-                            p.flipRotation = targetRotation
-                            preservedFlipRotation = targetRotation
-                        end
-                    end)
-                    break
-                end
-            end
+            runFlipAnim(sg, worldPanels)
         end)
+
+        -- ScrollingFrame for back side content (to handle overflow)
+        local scrollFrame = Instance.new("ScrollingFrame")
+        scrollFrame.Size = UDim2.new(1, -32, 1, -60)
+        scrollFrame.Position = UDim2.new(0, 16, 0, 60)
+        scrollFrame.BackgroundTransparency = 1
+        scrollFrame.BorderSizePixel = 0
+        scrollFrame.ScrollBarThickness = 4
+        scrollFrame.ScrollBarImageColor3 = Theme.primary
+        scrollFrame.ScrollBarImageTransparency = 0.3
+        scrollFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+        scrollFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y
+        scrollFrame.ScrollingDirection = Enum.ScrollingDirection.Y
+        scrollFrame.ClipsDescendants = true
+        scrollFrame.ZIndex = 1
+        scrollFrame.Parent = root
+
+        -- Content container
+        local contentContainer = Instance.new("Frame")
+        contentContainer.Size = UDim2.new(1, 0, 1, 0)
+        contentContainer.BackgroundTransparency = 1
+        contentContainer.Parent = scrollFrame
+        local contentLayout = Instance.new("UIListLayout")
+        contentLayout.Padding = UDim.new(0, 10)
+        contentLayout.Parent = contentContainer
 
         -- Autoexec multi-executor section
         local autoexecFrame = Instance.new("Frame")
         autoexecFrame.Size = UDim2.new(1, 0, 0, 70)
         autoexecFrame.BackgroundTransparency = 1
-        autoexecFrame.Position = UDim2.new(0, 0, 0, 70)
-        autoexecFrame.Parent = root
+        autoexecFrame.Parent = contentContainer
 
         local autoexecLabel = Instance.new("TextLabel")
         autoexecLabel.Size = UDim2.new(1, 0, 0, 24)
@@ -5465,7 +5851,8 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
             autoexecEnabled = enabled
             if enabled then
                 tween(toggleThumb, 0.3, {Position = UDim2.fromOffset(26, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
-                tween(toggleBg, 0.3, {BackgroundColor3 = Theme.primary}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                -- Use green instead of Theme.primary to avoid white slider on white theme
+                tween(toggleBg, 0.3, {BackgroundColor3 = Color3.fromRGB(76, 175, 80)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
             else
                 tween(toggleThumb, 0.3, {Position = UDim2.fromOffset(2, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
                 tween(toggleBg, 0.3, {BackgroundColor3 = Color3.fromRGB(60, 60, 60)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
@@ -5491,20 +5878,15 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                 local success, result = createAutoInjectScripts()
                 setupQueueOnTeleport()
                 if success then
-                    print("[SkinChanger] Autoexec enabled")
-                else
-                    warn("[SkinChanger] Autoexec write failed: " .. tostring(result))
                 end
             else
                 removeAutoInjectScripts()
-                print("[SkinChanger] Autoexec disabled")
             end
         end)
 
         pcall(function()
             if scIsAutoexecEnabled() then
                 updateToggleState(true)
-                print("[SkinChanger] Autoexec is enabled")
                 -- Re-write auto-inject + queue on teleport to keep it working after updates
                 createAutoInjectScripts()
                 setupQueueOnTeleport()
@@ -5516,14 +5898,13 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         local presetCount = #presetOrder
         local rowH = 32
         local rowGap = 6
-        local listH = presetCount * (rowH + rowGap)
+        local listH = presetCount * (rowH + rowGap) + 36  -- + Special Features button height (30) + gap (6)
         local headerH = 30
 
         local shaderFrame = Instance.new("Frame")
         shaderFrame.Size = UDim2.new(1, 0, 0, 24 + headerH + listH + 10)
         shaderFrame.BackgroundTransparency = 1
-        shaderFrame.Position = UDim2.new(0, 0, 0, 125)
-        shaderFrame.Parent = root
+        shaderFrame.Parent = contentContainer
 
         local shaderLabel = Instance.new("TextLabel")
         shaderLabel.Size = UDim2.new(1, 0, 0, 24)
@@ -5656,15 +6037,16 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
             else
                 break
             end
-            -- Ping
+            -- Ping (Shift+F3 style: Stats.Network.ServerStatsItem["Data Ping"])
             local pingMs = "—"
             pcall(function()
                 local stats = game:GetService("Stats")
-                if stats and stats.PerformanceStats then
-                    local ping = stats.PerformanceStats:FindFirstChild("Ping")
-                    if ping then
-                        pingMs = tostring(math.floor(ping:GetValue())) .. " ms"
-                    end
+                local net = stats and stats.Network
+                local item = net and net.ServerStatsItem and net.ServerStatsItem["Data Ping"]
+                if item then
+                    pingMs = tostring(math.floor(item:GetValue())) .. " ms"
+                else
+                    pingMs = tostring(math.floor(player:GetNetworkPing() * 1000)) .. " ms"
                 end
             end)
             if pingLabel and pingLabel.Parent then
@@ -5851,188 +6233,9 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         refreshSquares()
     end
 
-    -- ===== 2. TIME (CLOCK) =====
-    local s2 = makeSection(2, "Time", true)
-    do
-        local dialSize = 140
-        local clockWrap = Instance.new("Frame")
-        clockWrap.Size = UDim2.new(1, 0, 0, dialSize + 30)
-        clockWrap.BackgroundTransparency = 1
-        clockWrap.ClipsDescendants = true
-        clockWrap.Parent = s2.content
-
-        -- Digital time display
-        local timeLbl = Instance.new("TextLabel")
-        timeLbl.Size = UDim2.new(1, 0, 0, 22)
-        timeLbl.Position = UDim2.new(0, 0, 0, 0)
-        timeLbl.BackgroundTransparency = 1
-        timeLbl.Text = "12:00"
-        timeLbl.TextColor3 = C.WHITE
-        timeLbl.Font = FONT_BOLD
-        timeLbl.TextSize = 16
-        timeLbl.Parent = clockWrap
-
-        -- Circular dial
-        local dial = Instance.new("TextButton")
-        dial.Name = "Dial"
-        dial.Text = ""
-        dial.AutoButtonColor = false
-        dial.Active = true
-        dial.AnchorPoint = Vector2.new(0.5, 0)
-        dial.Size = UDim2.fromOffset(dialSize, dialSize)
-        dial.Position = UDim2.new(0.5, 0, 0, 26)
-        dial.BackgroundColor3 = C.BLACK
-        dial.BackgroundTransparency = 0.4
-        dial.BorderSizePixel = 0
-        dial.ClipsDescendants = true  -- Fix hand going outside when scrolling
-        dial.Parent = clockWrap
-        wmCorner(dial, 999)
-        wmStroke(dial, Theme.primary, 2, 0.2)
-
-        -- Hour markers (ticks + numbers)
-        for h = 0, 23 do
-            local isMajor = h % 6 == 0
-            local a = math.rad((h / 24) * 360 - 180)
-            local r = dialSize / 2 - (isMajor and 10 or 6)
-
-            local tick = Instance.new("Frame")
-            tick.AnchorPoint = Vector2.new(0.5, 0.5)
-            tick.Size = UDim2.fromOffset(isMajor and 3 or 2, isMajor and 12 or 6)
-            tick.Position = UDim2.fromScale(0.5 + math.sin(a) * r / dialSize, 0.5 - math.cos(a) * r / dialSize)
-            tick.Rotation = math.deg(a)
-            tick.BackgroundColor3 = isMajor and Theme.primary or C.WHITE
-            tick.BackgroundTransparency = isMajor and 0 or 0.6
-            tick.BorderSizePixel = 0
-            tick.Parent = dial
-
-            if isMajor then
-                local num = Instance.new("TextLabel")
-                num.AnchorPoint = Vector2.new(0.5, 0.5)
-                num.Size = UDim2.fromOffset(22, 14)
-                local nr = dialSize / 2 - 24
-                num.Position = UDim2.fromScale(0.5 + math.sin(a) * nr / dialSize, 0.5 - math.cos(a) * nr / dialSize)
-                num.BackgroundTransparency = 1
-                num.Text = string.format("%02d", h)
-                num.TextColor3 = Theme.primary
-                num.Font = FONT_BOLD
-                num.TextSize = 11
-                num.Parent = dial
-            end
-        end
-
-        -- Hand pivot (квадратный контейнер с центром в середине циферблата — вращаем его)
-        local handLen = math.floor(dialSize / 2) - 14
-        local pivotSize = handLen * 2  -- квадрат: центр контейнера = центр вращения
-        local handPivot = Instance.new("Frame")
-        handPivot.Name = "HandPivot"
-        handPivot.AnchorPoint = Vector2.new(0.5, 0.5)
-        handPivot.Position = UDim2.fromScale(0.5, 0.5)
-        handPivot.Size = UDim2.fromOffset(pivotSize, pivotSize)
-        handPivot.BackgroundTransparency = 1
-        handPivot.ZIndex = 3
-        handPivot.Parent = dial
-
-        -- Hand: прямоугольник, растущий вверх от центра контейнера
-        local hand = Instance.new("Frame")
-        hand.Name = "Hand"
-        hand.AnchorPoint = Vector2.new(0.5, 1)
-        hand.Position = UDim2.fromScale(0.5, 0.5)
-        hand.Size = UDim2.fromOffset(4, handLen)
-        hand.BackgroundColor3 = Theme.primary
-        hand.BorderSizePixel = 0
-        hand.ZIndex = 3
-        hand.Parent = handPivot
-        wmCorner(hand, 2)
-
-        -- Hand tip glow — на конце стрелки
-        local tip = Instance.new("Frame")
-        tip.AnchorPoint = Vector2.new(0.5, 0.5)
-        tip.Size = UDim2.fromOffset(12, 12)
-        tip.Position = UDim2.fromOffset(2, 0)
-        tip.BackgroundColor3 = Theme.primary
-        tip.BorderSizePixel = 0
-        tip.ZIndex = 3
-        tip.Parent = hand
-        wmCorner(tip, 999)
-
-        -- Center dot (over hand)
-        local centerDot = Instance.new("Frame")
-        centerDot.AnchorPoint = Vector2.new(0.5, 0.5)
-        centerDot.Size = UDim2.fromOffset(10, 10)
-        centerDot.Position = UDim2.fromScale(0.5, 0.5)
-        centerDot.BackgroundColor3 = Theme.primary
-        centerDot.BorderSizePixel = 0
-        centerDot.ZIndex = 5
-        centerDot.Parent = dial
-        wmCorner(centerDot, 999)
-
-        local function applyHours(hours)
-            hours = hours % 24
-            pcall(function() Lighting.TimeOfDay = formatClockTime(hours) end)
-            handPivot.Rotation = math.deg(clockTimeToAngle(hours))
-            timeLbl.Text = formatClockTime(hours)
-        end
-
-        -- Init
-        do
-            local initHours = 12
-            pcall(function()
-                local ct = Lighting.ClockTime
-                if type(ct) == "number" then initHours = ct end
-            end)
-            applyHours(initHours)
-        end
-
-        -- Drag handling — используем canvas-координаты (MouseMoved) + LockCurrentPosition + аккумуляция Delta для работы за пределами меню
-        local dragging = false
-        local virtX, virtY = 0, -1  -- виртуальный курсор от центра
-
-        local function updateFromVirt()
-            local angle = math.atan2(virtX, -virtY)
-            applyHours(angleToClockTime(angle))
-        end
-
-        dial.MouseButton1Down:Connect(function(x, y)
-            dragging = true
-            local cx = dial.AbsolutePosition.X + dial.AbsoluteSize.X / 2
-            local cy = dial.AbsolutePosition.Y + dial.AbsoluteSize.Y / 2
-            virtX = x - cx
-            virtY = y - cy
-            if virtX == 0 and virtY == 0 then virtY = -1 end
-            updateFromVirt()
-            UserInputService.MouseBehavior = Enum.MouseBehavior.LockCurrentPosition
-        end)
-
-        local moveConn = UserInputService.InputChanged:Connect(function(input)
-            if not dragging then return end
-            if input.UserInputType == Enum.UserInputType.MouseMovement then
-                virtX = virtX + input.Delta.X
-                virtY = virtY + input.Delta.Y
-                local maxR = dialSize * 3
-                local r2 = virtX*virtX + virtY*virtY
-                if r2 > maxR*maxR then
-                    local r = math.sqrt(r2)
-                    virtX = virtX / r * maxR
-                    virtY = virtY / r * maxR
-                end
-                updateFromVirt()
-            end
-        end)
-        local endConn = UserInputService.InputEnded:Connect(function(input)
-            if input.UserInputType == Enum.UserInputType.MouseButton1
-               or input.UserInputType == Enum.UserInputType.Touch then
-                if dragging then
-                    dragging = false
-                    UserInputService.MouseBehavior = Enum.MouseBehavior.Default
-                end
-            end
-        end)
-        uiConnections[dial] = {move = moveConn, endConn = endConn}
-    end
-
-    -- ===== 3. CLOSE SCRIPT =====
-    local s3 = makeSection(3, "Close Script", false)
-    s3.header.MouseButton1Click:Connect(function()
+    -- ===== 2. CLOSE SCRIPT =====
+    local s2 = makeSection(2, "Close Script", false)
+    s2.header.MouseButton1Click:Connect(function()
         -- Отключаем бинд на очки
         scriptDisabled = true
         -- Отключаем шейдеры
@@ -6060,7 +6263,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         s4.header.MouseButton1Click:Connect(function()
             glassesHidden = true  -- Set flag before hiding
             if hideGlassesWorldMenus then hideGlassesWorldMenus(true) end  -- keepHiddenFlag = true
-            
+
             -- Rotation explosion effect for HeadIcon
             if headIconAvatar and headIconAvatar.Parent then
                 TweenService:Create(headIconAvatar, TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.In), {
@@ -6069,13 +6272,37 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                     ImageTransparency = 1
                 }):Play()
             end
-            
+
             -- Hide HeadIcon after animation
             task.delay(0.4, function()
                 headIconUserHidden = true
             end)
         end)
     end
+
+    -- ===== 5. SPECIAL FEATURES =====
+    local specialBtn = Instance.new("TextButton")
+    specialBtn.LayoutOrder = 5
+    specialBtn.Size = UDim2.new(1, 0, 0, 44)
+    specialBtn.BackgroundColor3 = C.BLACK
+    specialBtn.BackgroundTransparency = 0.2
+    specialBtn.Text = "Special Features"
+    specialBtn.TextColor3 = C.WHITE
+    specialBtn.Font = FONT_BOLD
+    specialBtn.TextSize = 16
+    specialBtn.TextXAlignment = Enum.TextXAlignment.Left
+    specialBtn.AutoButtonColor = false
+    specialBtn.Parent = listWrap
+    wmCorner(specialBtn, 8)
+    wmStroke(specialBtn, Theme.primary, 1, 0.5)
+
+    local pad = Instance.new("UIPadding")
+    pad.PaddingLeft = UDim.new(0, 16)
+    pad.Parent = specialBtn
+
+    specialBtn.MouseButton1Click:Connect(function()
+        toggleSpecialFeaturesMenu()
+    end)
 
     -- REAL TIME section removed - duplicate clock
 
@@ -6156,22 +6383,89 @@ local function wmCreateViewportCard(parent, targetPlayerOrSkin, isSkin, index, o
 
     -- Avatar/Viewport (копия структуры из createSavedCard)
     local userId = isSkin and (targetPlayerOrSkin.userId or 0) or targetPlayerOrSkin.UserId
-    local avatar = Instance.new("ImageLabel")
-    avatar.Name = "Avatar"
-    avatar.Size = UDim2.new(1, -16, 0, 150)  -- Как в createSavedCard
-    avatar.Position = UDim2.new(0, 8, 0, 8)
-    avatar.BackgroundColor3 = C.BLACK
-    avatar.BackgroundTransparency = 0.05
-    avatar.BorderSizePixel = 0
-    avatar.ClipsDescendants = true
-    avatar.ZIndex = 2
-    avatar.ScaleType = Enum.ScaleType.Fit
-    avatar.Parent = card
-    wmCorner(avatar, 8)
-    wmStroke(avatar, Theme.dark, 1, 0.6)
 
-    -- Для всех используем rbxthumb (надёжно и работает)
-    avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(userId) .. "&w=420&h=420"
+    local avatarBuilt = false
+    if isSkin then
+        -- Render frozen snapshot of the saved skin so icons don't change when the source player updates their avatar
+        local viewport = Instance.new("ViewportFrame")
+        viewport.Name = "Avatar"
+        viewport.Size = UDim2.new(1, -16, 0, 150)
+        viewport.Position = UDim2.new(0, 8, 0, 8)
+        viewport.BackgroundColor3 = C.BLACK
+        viewport.BackgroundTransparency = 0.05
+        viewport.BorderSizePixel = 0
+        viewport.ClipsDescendants = true
+        viewport.ZIndex = 2
+        viewport.Ambient = Color3.fromRGB(200, 200, 220)
+        viewport.LightColor = Color3.fromRGB(255, 255, 255)
+        viewport.LightDirection = Vector3.new(-0.5, -1, -0.5)
+        viewport.Parent = card
+        wmCorner(viewport, 8)
+        wmStroke(viewport, Theme.dark, 1, 0.6)
+
+        local cam = Instance.new("Camera")
+        cam.Parent = viewport
+        viewport.CurrentCamera = cam
+
+        -- Try frozen skin-model first, then session character clone
+        local ok1, builtModel = pcall(buildSkinModel, targetPlayerOrSkin)
+        if ok1 and builtModel then
+            local ok2 = buildViewportFromSkinModel(viewport, builtModel)
+            if ok2 then
+                avatarBuilt = true
+            else
+                pcall(function() builtModel:Destroy() end)
+            end
+        end
+        if not avatarBuilt and targetPlayerOrSkin.characterClone then
+            avatarBuilt = buildViewportFromCharacter(viewport, targetPlayerOrSkin.characterClone)
+        end
+        if not avatarBuilt then
+            viewport:Destroy()
+        end
+    end
+
+    if not avatarBuilt then
+        if isSkin then
+            -- Frozen fallback for saved skins: colored silhouette with initial (never changes)
+            local frozen = Instance.new("Frame")
+            frozen.Name = "Avatar"
+            frozen.Size = UDim2.new(1, -16, 0, 150)
+            frozen.Position = UDim2.new(0, 8, 0, 8)
+            frozen.BorderSizePixel = 0
+            frozen.ZIndex = 2
+            local torsoCol = (targetPlayerOrSkin.bodyColors and targetPlayerOrSkin.bodyColors.TorsoColor3) or Color3.fromRGB(60, 60, 80)
+            frozen.BackgroundColor3 = torsoCol
+            frozen.Parent = card
+            wmCorner(frozen, 8)
+            wmStroke(frozen, Theme.dark, 1, 0.6)
+            local initial = Instance.new("TextLabel")
+            initial.BackgroundTransparency = 1
+            initial.Size = UDim2.fromScale(1, 1)
+            initial.Text = string.upper(string.sub(targetPlayerOrSkin.playerName or "?", 1, 1))
+            initial.TextColor3 = C.WHITE
+            initial.TextSize = 72
+            initial.Font = FONT_BOLD
+            initial.ZIndex = 3
+            initial.Parent = frozen
+        else
+            -- Live thumbnail for players tab (always up-to-date)
+            local avatar = Instance.new("ImageLabel")
+            avatar.Name = "Avatar"
+            avatar.Size = UDim2.new(1, -16, 0, 150)
+            avatar.Position = UDim2.new(0, 8, 0, 8)
+            avatar.BackgroundColor3 = C.BLACK
+            avatar.BackgroundTransparency = 0.05
+            avatar.BorderSizePixel = 0
+            avatar.ClipsDescendants = true
+            avatar.ZIndex = 2
+            avatar.ScaleType = Enum.ScaleType.Fit
+            avatar.Parent = card
+            wmCorner(avatar, 8)
+            wmStroke(avatar, Theme.dark, 1, 0.6)
+            avatar.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(userId) .. "&w=420&h=420"
+        end
+    end
 
     -- Luxury delete X для сохранённых скинов (как в createSavedCard)
     if isSkin then
@@ -6617,10 +6911,6 @@ function createWorldPanel(angleDeg, phase, contentBuilder, name, sizeStuds, canv
     sg.Parent = part
 
     local ok, err = pcall(function() contentBuilder(sg, onDragStart, onDragInput, onDragEnd) end)
-    if not ok then
-        warn("[World Panel] Error in contentBuilder for " .. name .. ": " .. tostring(err))
-    end
-
     -- Back SurfaceGui для отображения с обратной стороны
     local sgBack = Instance.new("SurfaceGui")
     sgBack.Name = "ContentBack"
@@ -6633,10 +6923,6 @@ function createWorldPanel(angleDeg, phase, contentBuilder, name, sizeStuds, canv
     sgBack.Parent = part
 
     local ok2, err2 = pcall(function() contentBuilder(sgBack, onDragStart, onDragInput, onDragEnd) end)
-    if not ok2 then
-        warn("[World Panel] Error in contentBuilder for " .. name .. " (back): " .. tostring(err2))
-    end
-
     panelData = {
         part = part,
         sg = sg,
@@ -6670,7 +6956,6 @@ function captureAnchorForward()
         end
     end
     if not hrp then
-        warn("[Glasses] captureAnchorForward: no HRP/Torso after wait")
         return
     end
     local fwd = hrp.CFrame.LookVector
@@ -6706,56 +6991,130 @@ showGlassesWorldMenus = function()
         else
             g_anchorForward = Vector3.new(0, 0, -1)
         end
-        warn("[Glasses] Using fallback forward: " .. tostring(g_anchorForward))
+        
     end
     buildPanels()
     
-    -- Explosion effect when menu appears
+    -- Shatter Reverse: shards fly in and assemble the panel
     task.spawn(function()
-        if #worldPanels > 0 then
-            local panel = worldPanels[1].part
-            if panel then
-                -- Create explosion particles
-                local explosionAttach = Instance.new("Attachment")
-                explosionAttach.Position = Vector3.new(0, 0, 0)
-                explosionAttach.Parent = panel
-                
-                local explosion = Instance.new("ParticleEmitter")
-                explosion.Color = ColorSequence.new({
-                    ColorSequenceKeypoint.new(0, Color3.fromRGB(255, 200, 100)),
-                    ColorSequenceKeypoint.new(0.5, Color3.fromRGB(255, 100, 50)),
-                    ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 50, 200))
-                })
-                explosion.Size = NumberSequence.new({
-                    NumberSequenceKeypoint.new(0, 0),
-                    NumberSequenceKeypoint.new(0.1, 2),
-                    NumberSequenceKeypoint.new(0.5, 0.5),
-                    NumberSequenceKeypoint.new(1, 0)
-                })
-                explosion.Transparency = NumberSequence.new({
-                    NumberSequenceKeypoint.new(0, 0),
-                    NumberSequenceKeypoint.new(0.3, 0.3),
-                    NumberSequenceKeypoint.new(1, 1)
-                })
-                explosion.Lifetime = NumberRange.new(0.3, 0.6)
-                explosion.Rate = 0
-                explosion.Speed = NumberRange.new(5, 15)
-                explosion.SpreadAngle = Vector2.new(180, 180)
-                explosion.Acceleration = Vector3.new(0, 5, 0)
-                explosion.RotSpeed = NumberRange.new(-180, 180)
-                explosion.LightEmission = 1
-                explosion.LightInfluence = 0
-                explosion.Parent = explosionAttach
-                
-                -- Emit burst
-                explosion:Emit(50)
-                
-                -- Cleanup
-                task.delay(1, function()
-                    explosionAttach:Destroy()
-                end)
+        if #worldPanels == 0 then return end
+        local panel = worldPanels[1].part
+        if not panel or not panel.Parent then return end
+
+        local finalCFrame = panel.CFrame
+        local finalSize = panel.Size
+        local shardColor = Theme.primary or Color3.fromRGB(255, 255, 255)
+
+        -- Hide panel & its SurfaceGuis during assembly
+        local sgList = {}
+        for _, ch in ipairs(panel:GetChildren()) do
+            if ch:IsA("SurfaceGui") then
+                table.insert(sgList, {sg = ch, was = ch.Enabled})
+                ch.Enabled = false
             end
         end
+        local origTransparency = panel.Transparency
+        panel.Transparency = 1
+
+        local shardCount = 14
+        local shards = {}
+        for i = 1, shardCount do
+            local shard = Instance.new("Part")
+            shard.Name = "MenuShard"
+            shard.Size = Vector3.new(0.4, 0.4, 0.05)
+            shard.Material = Enum.Material.Neon
+            shard.Color = shardColor
+            shard.Transparency = 0.2
+            shard.Anchored = true
+            shard.CanCollide = false
+            shard.CanQuery = false
+            shard.CanTouch = false
+            shard.Massless = true
+            shard.CastShadow = false
+
+            local angle = math.random() * math.pi * 2
+            local radius = 6 + math.random() * 4
+            local heightOff = (math.random() - 0.5) * 6
+            local offset = Vector3.new(math.cos(angle) * radius, heightOff, math.sin(angle) * radius)
+            local randRot = CFrame.Angles(
+                math.random() * math.pi * 2,
+                math.random() * math.pi * 2,
+                math.random() * math.pi * 2
+            )
+            shard.CFrame = CFrame.new(finalCFrame.Position + offset) * randRot
+            shard.Parent = panel.Parent
+
+            local a0 = Instance.new("Attachment"); a0.Name = "A0"; a0.Position = Vector3.new(-0.2, 0, 0); a0.Parent = shard
+            local a1 = Instance.new("Attachment"); a1.Name = "A1"; a1.Position = Vector3.new(0.2, 0, 0); a1.Parent = shard
+            local trail = Instance.new("Trail")
+            trail.Attachment0 = a0
+            trail.Attachment1 = a1
+            trail.Lifetime = 0.2
+            trail.MinLength = 0
+            trail.LightEmission = 1
+            trail.Color = ColorSequence.new(shardColor)
+            trail.Transparency = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 0.3),
+                NumberSequenceKeypoint.new(1, 1),
+            })
+            trail.WidthScale = NumberSequence.new({
+                NumberSequenceKeypoint.new(0, 1),
+                NumberSequenceKeypoint.new(1, 0),
+            })
+            trail.Parent = shard
+
+            table.insert(shards, {part = shard, offset = offset, rot = randRot})
+        end
+
+        -- Per-frame lerp toward current panel position (follows panel motion)
+        local startTime = tick()
+        local duration = 0.45
+        local animConn
+        animConn = RunService.RenderStepped:Connect(function()
+            if not panel.Parent then
+                if animConn then animConn:Disconnect() end
+                return
+            end
+            local progress = math.min((tick() - startTime) / duration, 1)
+            local overshoot = 1.70158
+            -- easeInBack
+            local eased = progress * progress * ((overshoot + 1) * progress - overshoot)
+            local invEased = 1 - eased
+            local targetPos = panel.CFrame.Position
+            local sizeScale = 1 - eased * 0.95
+            for _, info in ipairs(shards) do
+                if info.part.Parent then
+                    local pos = targetPos + info.offset * invEased
+                    info.part.CFrame = CFrame.new(pos) * info.rot
+                    info.part.Size = Vector3.new(0.4 * sizeScale, 0.4 * sizeScale, 0.05)
+                    info.part.Transparency = 0.2 + eased * 0.8
+                end
+            end
+            if progress >= 1 then
+                if animConn then animConn:Disconnect() end
+            end
+        end)
+
+        -- Flash + reveal panel at assembly moment
+        task.delay(0.4, function()
+            if not panel.Parent then return end
+            local flash = Instance.new("PointLight")
+            flash.Brightness = 3
+            flash.Range = 12
+            flash.Color = shardColor
+            flash.Parent = panel
+            TweenService:Create(flash, TweenInfo.new(0.15), {Brightness = 0, Range = 0}):Play()
+            task.delay(0.2, function() if flash.Parent then flash:Destroy() end end)
+
+            TweenService:Create(panel, TweenInfo.new(0.2), {Transparency = origTransparency}):Play()
+            for _, info in ipairs(sgList) do
+                if info.sg.Parent then info.sg.Enabled = info.was end
+            end
+        end)
+
+        task.delay(0.7, function()
+            for _, info in ipairs(shards) do if info.part.Parent then info.part:Destroy() end end
+        end)
     end)
 end
 
@@ -6854,8 +7213,22 @@ rebuildWorldPanels = function()
         flipAnimationConnection:Disconnect()
         flipAnimationConnection = nil
     end
+
+    -- Save Special Features menu state before rebuilding
+    local specialWasOpen = specialMenuOpen
+    local specialWasAuthenticated = specialMenuAuthenticated
+
     -- НЕ трогаем g_anchorForward (точка крепления остаётся)
     buildPanels()
+
+    -- Restore Special Features menu if it was open
+    if specialWasOpen then
+        if specialWasAuthenticated and emptySpecialMenuPart == nil then
+            createEmptySpecialMenu()
+        elseif not specialWasAuthenticated and specialMenuPart == nil then
+            createPasswordMenu()
+        end
+    end
 end
 
 -- ============= FOLLOW + BOB (physics-based pet-like) =============
@@ -7002,7 +7375,6 @@ task.spawn(function()
             end
             if skinToApply then
                 pcall(function() applySavedSkin(skinToApply) end)
-                print("[SkinChanger] Manual launch: restored last skin " .. tostring(skinToApply.playerName))
             end
         end
     end)
@@ -7014,7 +7386,6 @@ task.spawn(function()
     pcall(function()
         local ae = scReadAutoexec()
         if not ae.enabled then return end
-        print("[SkinChanger Autoexec] Starting auto-apply sequence...")
         -- Re-queue teleport loader (in case of next teleport)
         pcall(setupQueueOnTeleport)
         -- Re-write auto-inject file (in case executor was reinstalled/updated)
@@ -7033,7 +7404,6 @@ task.spawn(function()
         end
 
         if not charLoaded then
-            warn("[SkinChanger Autoexec] Character failed to load within timeout")
             return
         end
 
@@ -7042,30 +7412,22 @@ task.spawn(function()
 
         -- Resolve lastSkin from autoexec file (match by userId+playerName, fallback to index)
         local skinToApply = nil
-        print("[SkinChanger Autoexec] savedSkins count: " .. tostring(savedSkins and #savedSkins or 0))
         if type(ae.lastSkin) == "table" and savedSkins and #savedSkins > 0 then
             local wantUserId   = ae.lastSkin.userId
             local wantName     = ae.lastSkin.playerName
             local wantIndex    = ae.lastSkin.index
-            print("[SkinChanger Autoexec] lastSkin data: name=" .. tostring(wantName) .. " userId=" .. tostring(wantUserId) .. " index=" .. tostring(wantIndex))
             -- Prefer identity match so index changes (after adding/removing other skins) don't break it
             if wantUserId or wantName then
                 for i, s in ipairs(savedSkins) do
-                    print("[SkinChanger Autoexec] Checking saved skin " .. i .. ": name=" .. tostring(s.playerName) .. " userId=" .. tostring(s.userId))
                     if (wantUserId and s.userId == wantUserId) or (wantName and s.playerName == wantName) then
                         skinToApply = s
-                        print("[SkinChanger Autoexec] Matched skin by identity: " .. s.playerName)
                         break
                     end
                 end
             end
             if not skinToApply and type(wantIndex) == "number" and savedSkins[wantIndex] then
                 skinToApply = savedSkins[wantIndex]
-                print("[SkinChanger Autoexec] Matched skin by index: " .. wantIndex)
             end
-        end
-        if not skinToApply then
-            print("[SkinChanger Autoexec] No lastSkin recorded or match failed; skipping auto-apply")
         end
 
         if skinToApply then
@@ -7074,15 +7436,11 @@ task.spawn(function()
                     applySavedSkin(skinToApply)
                 end)
                 if success then
-                    print("[SkinChanger Autoexec] Skin applied successfully (attempt " .. attempt .. ")")
                     break
                 else
-                    warn("[SkinChanger Autoexec] Skin apply failed (attempt " .. attempt .. "): " .. tostring(err))
                     if attempt < 3 then task.wait(1) end
                 end
             end
-        else
-            print("[SkinChanger Autoexec] No saved skins to apply")
         end
 
         task.wait(1)
@@ -7090,29 +7448,19 @@ task.spawn(function()
         -- Check glasses state and restore if they were open
         local glassesState = (scReadSkinsBundle().glassesState) or "closed"
         if glassesState == "open" then
-            print("[SkinChanger Autoexec] Restoring glasses state...")
             local glassesWaitStart = tick()
             while tick() - glassesWaitStart < 5 do
                 if g_putOnGlasses and not g_glassesOpen then
-                    local success, err = pcall(g_putOnGlasses)
-                    if success then
-                        print("[SkinChanger Autoexec] Glasses equipped successfully")
-                        -- Open flying menu after glasses are equipped
-                        task.wait(0.5)
-                        if not glassesMenuVisible then
-                            pcall(showGlassesWorldMenus)
-                        end
-                    else
-                        warn("[SkinChanger Autoexec] Failed to equip glasses: " .. tostring(err))
+                    pcall(g_putOnGlasses)
+                    task.wait(0.5)
+                    if not glassesMenuVisible then
+                        pcall(showGlassesWorldMenus)
                     end
                     break
                 end
                 task.wait(0.2)
             end
         end
-
-        print("[SkinChanger Autoexec] Auto-apply sequence completed")
     end)
 end)
 -- Меню стартует скрытым; HeadIcon видна, Insert/click открывает.
-print("[SkinChanger Premium] v3 loaded — Insert/HeadIcon to toggle.")
