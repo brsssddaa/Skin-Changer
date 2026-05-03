@@ -274,21 +274,6 @@ end
 -- Run migration immediately
 pcall(scMigrateLegacy)
 
--- EARLY EXIT: If autoexec is disabled, exit script immediately
--- This prevents the script from loading at all when autoexec is OFF
-local shouldExit = false
-local ae_check_ok, ae_data = pcall(scReadAutoexec)
-if ae_check_ok and ae_data and not ae_data.enabled then
-    print("[SkinChanger] Autoexec is disabled - script will not activate")
-    -- Remove any lingering auto-inject scripts to ensure they don't load on next join
-    pcall(removeAutoInjectScripts)
-    shouldExit = true
-end
-
-if shouldExit then
-    return -- Exit the script at top level
-end
-
 ----------------------------------------------------------------
 -- СОХРАНЕНИЕ / ЗАГРУЗКА (writefile / readfile)
 ----------------------------------------------------------------
