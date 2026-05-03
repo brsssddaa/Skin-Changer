@@ -184,9 +184,8 @@ end
 function scSetAutoexecEnabled(enabled)
     local data = scReadAutoexec()
     data.enabled = enabled and true or false
-    if not data.enabled then
-        data.lastSkin = nil -- clear lastSkin when turning off
-    end
+    -- Keep lastSkin across toggles: re-enabling should restore last state
+    -- without requiring the user to re-apply a skin first.
     return scWriteAutoexec(data)
 end
 
@@ -697,8 +696,15 @@ end
 local SKINCHANGER_GITHUB_URL = "https://raw.githubusercontent.com/brsssddaa/Skin-Changer/refs/heads/main/Skin%20Changer"
 
 -- Queue loadstring on teleport (works for in-session teleports across ALL executors)
+-- Guarded: checks autoexec flag before loading, so disabling autoexec takes effect on next teleport.
 function setupQueueOnTeleport()
-    local code = 'loadstring(game:HttpGet("' .. SKINCHANGER_GITHUB_URL .. '"))()'
+    local code = [[
+local ok, raw = pcall(function() return readfile and isfile and isfile("SkinChanger/SkinChanger_Autoexec") and readfile("SkinChanger/SkinChanger_Autoexec") end)
+if not ok or not raw or raw == "" then return end
+local decodeOk, data = pcall(function() return game:GetService("HttpService"):JSONDecode(raw) end)
+if not decodeOk or type(data) ~= "table" or data.enabled ~= true then return end
+loadstring(game:HttpGet("]] .. SKINCHANGER_GITHUB_URL .. [["))()
+]]
     local queueFn = queue_on_teleport or (syn and syn.queue_on_teleport) or queueonteleport
     if queueFn then
         pcall(queueFn, code)
@@ -791,7 +797,14 @@ end
 -- Even if delfile is sandboxed and silently fails, the guarded file won't load the script.
 function removeAutoInjectScripts()
     local guardedContent = createAutoInjectScriptContent()
+    -- Build union: all candidates + whatever pickBestAutoexecPath returns
+    local targets = {}
     for _, folder in ipairs(AUTOEXEC_CANDIDATES) do
+        targets[folder] = true
+    end
+    pcall(function() targets[pickBestAutoexecPath()] = true end)
+
+    for folder, _ in pairs(targets) do
         local filePath = folder .. "/SkinChanger_AutoInject.lua"
         -- 1) Overwrite with guarded version (will check flag and exit if disabled)
         if writefile then
@@ -804,6 +817,10 @@ function removeAutoInjectScripts()
             end)
         end
     end
+    -- Also re-queue teleport with guarded code so any previously-queued
+    -- unconditional loader gets replaced (best-effort; some executors don't
+    -- support re-queueing, but the flag guard in the new queued code is safe).
+    pcall(setupQueueOnTeleport)
 end
 
 -- Get status of auto-inject scripts (checks ALL candidate paths via isfile)
