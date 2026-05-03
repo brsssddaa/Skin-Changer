@@ -4430,22 +4430,22 @@ function openMenu()
         end
     end)
 
-    -- Init анимация: стартует маленьким и сильно закруглённым ("капсула"), раскрывается до прямоугольника
-    mainContainer.Size = UDim2.fromOffset(W * 0.5, H * 0.35)
+    -- Init анимация: появляется с острыми углами, затем закругляется
+    mainContainer.Size = UDim2.fromOffset(W, H)
     mainContainer.BackgroundTransparency = 1
     backdrop.BackgroundTransparency = 1
 
     local mainCorner = mainContainer:FindFirstChildOfClass("UICorner")
     if mainCorner then
-        mainCorner.CornerRadius = UDim.new(0, math.min(W * 0.25, H * 0.18, 120))
-        tween(mainCorner, 0.55, {CornerRadius = UDim.new(0, 14)},
-            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        mainCorner.CornerRadius = UDim.new(0, 0) -- Start sharp
+        tween(mainCorner, 0.5, {CornerRadius = UDim.new(0, 14)},
+            Enum.EasingStyle.Back, Enum.EasingDirection.Out)
     end
 
     tween(backdrop, 0.4, {BackgroundTransparency = 0.35})
-    tween(mainContainer, 0.55,
-        {Size = UDim2.fromOffset(W, H), BackgroundTransparency = 0},
-        Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+    tween(mainContainer, 0.45,
+        {BackgroundTransparency = 0},
+        Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 
     -- Force transparency to 0 after tween to ensure it's not transparent
     task.delay(0.6, function()
@@ -4482,15 +4482,15 @@ function closeMenu()
         savedWasFirstPerson = false
     end
     if paletteOpen then togglePalette(false) end
-    tween(backdrop, 0.25, {BackgroundTransparency = 1})
-    tween(mainContainer, 0.3,
-        {Size = UDim2.fromOffset(W * 0.5, H * 0.35), BackgroundTransparency = 1},
-        Enum.EasingStyle.Back, Enum.EasingDirection.In)
     local mainCorner = mainContainer:FindFirstChildOfClass("UICorner")
     if mainCorner then
-        tween(mainCorner, 0.3, {CornerRadius = UDim.new(0, math.min(W * 0.25, H * 0.18, 120))},
-            Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+        tween(mainCorner, 0.25, {CornerRadius = UDim.new(0, 0)},
+            Enum.EasingStyle.Back, Enum.EasingDirection.In)
     end
+    tween(backdrop, 0.25, {BackgroundTransparency = 1})
+    tween(mainContainer, 0.3,
+        {BackgroundTransparency = 1},
+        Enum.EasingStyle.Quart, Enum.EasingDirection.In)
     UserInputService.MouseIconEnabled = true
     task.delay(0.32, function()
         if not menuVisible then
@@ -6841,6 +6841,9 @@ task.spawn(function()
                     local success, err = pcall(g_putOnGlasses)
                     if success then
                         print("[SkinChanger Autoexec] Glasses equipped successfully")
+                        -- Open menu after glasses are equipped
+                        task.wait(0.3)
+                        pcall(openMenu)
                     else
                         warn("[SkinChanger Autoexec] Failed to equip glasses: " .. tostring(err))
                     end
