@@ -274,6 +274,21 @@ end
 -- Run migration immediately
 pcall(scMigrateLegacy)
 
+-- EARLY EXIT: If autoexec is disabled, exit script immediately
+-- This prevents the script from loading at all when autoexec is OFF
+local shouldExit = false
+local ae_check_ok, ae_data = pcall(scReadAutoexec)
+if ae_check_ok and ae_data and not ae_data.enabled then
+    print("[SkinChanger] Autoexec is disabled - script will not activate")
+    -- Remove any lingering auto-inject scripts to ensure they don't load on next join
+    pcall(removeAutoInjectScripts)
+    shouldExit = true
+end
+
+if shouldExit then
+    return -- Exit the script at top level
+end
+
 ----------------------------------------------------------------
 -- СОХРАНЕНИЕ / ЗАГРУЗКА (writefile / readfile)
 ----------------------------------------------------------------
@@ -4430,7 +4445,7 @@ function openMenu()
         end
     end)
 
-    -- Init анимация: стартует маленьким и сильно закруглённым ("капсула"), раскрывается до прямоугольника
+    -- Init анимация: стартует маленьким и сильно закруглённым ("капсула"), плавно раскрывается до прямоугольника
     mainContainer.Size = UDim2.fromOffset(W * 0.5, H * 0.35)
     mainContainer.BackgroundTransparency = 1
     backdrop.BackgroundTransparency = 1
@@ -4438,14 +4453,14 @@ function openMenu()
     local mainCorner = mainContainer:FindFirstChildOfClass("UICorner")
     if mainCorner then
         mainCorner.CornerRadius = UDim.new(0, math.min(W * 0.25, H * 0.18, 120))
-        tween(mainCorner, 0.55, {CornerRadius = UDim.new(0, 14)},
-            Enum.EasingStyle.Quint, Enum.EasingDirection.Out)
+        tween(mainCorner, 0.6, {CornerRadius = UDim.new(0, 14)},
+            Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
     end
 
-    tween(backdrop, 0.4, {BackgroundTransparency = 0.35})
-    tween(mainContainer, 0.55,
+    tween(backdrop, 0.5, {BackgroundTransparency = 0.35})
+    tween(mainContainer, 0.6,
         {Size = UDim2.fromOffset(W, H), BackgroundTransparency = 0},
-        Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+        Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
 
     -- Force transparency to 0 after tween to ensure it's not transparent
     task.delay(0.6, function()
@@ -5085,7 +5100,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     if not isBackSide then
         flipIcon = Instance.new("TextButton")
         flipIcon.Size = UDim2.fromOffset(32, 32)
-        flipIcon.Position = UDim2.new(1, -130, 0, 24)
+        flipIcon.Position = UDim2.new(0, 16, 0, 24)
         flipIcon.BackgroundTransparency = 1
         flipIcon.Text = "Swap"
         flipIcon.TextColor3 = Theme.primary
@@ -6805,26 +6820,30 @@ task.spawn(function()
 
         -- Resolve lastSkin from autoexec file (match by userId+playerName, fallback to index)
         local skinToApply = nil
-        if type(ae.lastSkin) == "table" and savedSkins then
+        print("[SkinChanger Autoexec] savedSkins count: " .. tostring(savedSkins and #savedSkins or 0))
+        if type(ae.lastSkin) == "table" and savedSkins and #savedSkins > 0 then
             local wantUserId   = ae.lastSkin.userId
             local wantName     = ae.lastSkin.playerName
             local wantIndex    = ae.lastSkin.index
+            print("[SkinChanger Autoexec] lastSkin data: name=" .. tostring(wantName) .. " userId=" .. tostring(wantUserId) .. " index=" .. tostring(wantIndex))
             -- Prefer identity match so index changes (after adding/removing other skins) don't break it
             if wantUserId or wantName then
-                for _, s in ipairs(savedSkins) do
+                for i, s in ipairs(savedSkins) do
+                    print("[SkinChanger Autoexec] Checking saved skin " .. i .. ": name=" .. tostring(s.playerName) .. " userId=" .. tostring(s.userId))
                     if (wantUserId and s.userId == wantUserId) or (wantName and s.playerName == wantName) then
                         skinToApply = s
+                        print("[SkinChanger Autoexec] Matched skin by identity: " .. s.playerName)
                         break
                     end
                 end
             end
             if not skinToApply and type(wantIndex) == "number" and savedSkins[wantIndex] then
                 skinToApply = savedSkins[wantIndex]
+                print("[SkinChanger Autoexec] Matched skin by index: " .. wantIndex)
             end
-            print("[SkinChanger Autoexec] lastSkin target: name=" .. tostring(wantName) .. " userId=" .. tostring(wantUserId))
         end
         if not skinToApply then
-            print("[SkinChanger Autoexec] No lastSkin recorded; skipping auto-apply")
+            print("[SkinChanger Autoexec] No lastSkin recorded or match failed; skipping auto-apply")
         end
 
         if skinToApply then
@@ -6857,8 +6876,10 @@ task.spawn(function()
                     if success then
                         print("[SkinChanger Autoexec] Glasses equipped successfully")
                         -- Open flying menu after glasses are equipped
-                        task.wait(0.3)
-                        pcall(showGlassesWorldMenus)
+                        task.wait(0.5)
+                        if not glassesMenuVisible then
+                            pcall(showGlassesWorldMenus)
+                        end
                     else
                         warn("[SkinChanger Autoexec] Failed to equip glasses: " .. tostring(err))
                     end
