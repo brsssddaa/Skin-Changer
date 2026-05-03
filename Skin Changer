@@ -6797,6 +6797,40 @@ task.spawn(function()
             task.wait(1.5)
             pcall(function() applyShaderPreset(settings.shaderPreset) end)
         end
+        -- Restore last applied skin on MANUAL launch too (autoexec branch handles its own case).
+        -- User can use the RESTORE button on their own player card to revert to original appearance.
+        if not scIsAutoexecEnabled() and type(settings.lastSkin) == "table" and savedSkins and #savedSkins > 0 then
+            -- Wait for character to be fully loaded
+            local waitStart = tick()
+            while tick() - waitStart < 10 do
+                if player.Character and player.Character:FindFirstChild("Humanoid")
+                   and player.Character:FindFirstChild("Head") then
+                    break
+                end
+                task.wait(0.3)
+            end
+            task.wait(0.8)
+
+            local wantUserId = settings.lastSkin.userId
+            local wantName   = settings.lastSkin.playerName
+            local wantIndex  = settings.lastSkin.index
+            local skinToApply = nil
+            if wantUserId or wantName then
+                for _, s in ipairs(savedSkins) do
+                    if (wantUserId and s.userId == wantUserId) or (wantName and s.playerName == wantName) then
+                        skinToApply = s
+                        break
+                    end
+                end
+            end
+            if not skinToApply and type(wantIndex) == "number" and savedSkins[wantIndex] then
+                skinToApply = savedSkins[wantIndex]
+            end
+            if skinToApply then
+                pcall(function() applySavedSkin(skinToApply) end)
+                print("[SkinChanger] Manual launch: restored last skin " .. tostring(skinToApply.playerName))
+            end
+        end
     end)
 end)
 
