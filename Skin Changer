@@ -111,6 +111,147 @@ glassesHidden = false   -- true когда очки на лице, но пане
 scriptDisabled = false  -- true когда скрипт отключен через Close Script
 
 ----------------------------------------------------------------
+-- STORAGE: consolidated SkinChanger/ folder (JSON files)
+----------------------------------------------------------------
+SC_DIR           = "SkinChanger"
+SC_SKINS_FILE    = SC_DIR .. "/SkinChanger_SavedSkins"
+SC_AUTOEXEC_FILE = SC_DIR .. "/SkinChanger_Autoexec"
+
+function ensureSkinChangerDir()
+    if makefolder and isfolder then
+        pcall(function()
+            if not isfolder(SC_DIR) then makefolder(SC_DIR) end
+        end)
+    end
+end
+
+function scReadJSON(path)
+    if not (readfile and isfile) then return nil end
+    local ok, result = pcall(function()
+        if not isfile(path) then return nil end
+        local raw = readfile(path)
+        if not raw or raw == "" then return nil end
+        return HttpService:JSONDecode(raw)
+    end)
+    if ok then return result end
+    return nil
+end
+
+function scWriteJSON(path, tbl)
+    if not writefile then return false end
+    ensureSkinChangerDir()
+    local ok = pcall(function()
+        writefile(path, HttpService:JSONEncode(tbl or {}))
+    end)
+    return ok
+end
+
+function scReadSkinsBundle()
+    local data = scReadJSON(SC_SKINS_FILE)
+    if type(data) ~= "table" then
+        data = { savedSkins = {}, glassesState = "closed" }
+    end
+    if type(data.savedSkins) ~= "table" then data.savedSkins = {} end
+    if type(data.glassesState) ~= "string" then data.glassesState = "closed" end
+    return data
+end
+
+function scWriteSkinsBundle(bundle)
+    return scWriteJSON(SC_SKINS_FILE, bundle)
+end
+
+function scReadAutoexec()
+    local data = scReadJSON(SC_AUTOEXEC_FILE)
+    if type(data) ~= "table" then
+        data = { enabled = false }
+    end
+    if type(data.enabled) ~= "boolean" then data.enabled = false end
+    return data
+end
+
+function scWriteAutoexec(tbl)
+    return scWriteJSON(SC_AUTOEXEC_FILE, tbl)
+end
+
+function scIsAutoexecEnabled()
+    return scReadAutoexec().enabled == true
+end
+
+function scSetAutoexecEnabled(enabled)
+    local data = scReadAutoexec()
+    data.enabled = enabled and true or false
+    if not data.enabled then
+        data.lastSkin = nil -- clear lastSkin when turning off
+    end
+    return scWriteAutoexec(data)
+end
+
+function scSetLastSkinIfAutoexec(skinEntry)
+    -- Only write lastSkin when autoexec is enabled
+    local data = scReadAutoexec()
+    if not data.enabled then return end
+    data.lastSkin = skinEntry
+    scWriteAutoexec(data)
+end
+
+function scSetGlassesState(state)
+    local bundle = scReadSkinsBundle()
+    bundle.glassesState = state
+    scWriteSkinsBundle(bundle)
+end
+
+-- One-shot migration from legacy files
+function scMigrateLegacy()
+    ensureSkinChangerDir()
+
+    -- Migrate saved skins
+    if isfile and isfile("SkinChanger_SavedSkins.json") then
+        local ok, legacy = pcall(function()
+            return HttpService:JSONDecode(readfile("SkinChanger_SavedSkins.json"))
+        end)
+        if ok and type(legacy) == "table" then
+            local bundle = scReadSkinsBundle()
+            bundle.savedSkins = legacy
+            scWriteSkinsBundle(bundle)
+        end
+        pcall(function() if delfile then delfile("SkinChanger_SavedSkins.json") end end)
+    end
+
+    -- Migrate glasses state
+    if isfile and isfile("SkinChanger_GlassesState.txt") then
+        local ok, content = pcall(readfile, "SkinChanger_GlassesState.txt")
+        if ok and content then
+            local bundle = scReadSkinsBundle()
+            bundle.glassesState = content
+            scWriteSkinsBundle(bundle)
+        end
+        pcall(function() if delfile then delfile("SkinChanger_GlassesState.txt") end end)
+    end
+
+    -- Migrate autoexec flag + lastSkin index
+    local legacyEnabled = nil
+    if isfile and isfile("SkinChanger_Autoexec.txt") then
+        local ok, content = pcall(readfile, "SkinChanger_Autoexec.txt")
+        if ok and content == "true" then legacyEnabled = true else legacyEnabled = false end
+        pcall(function() if delfile then delfile("SkinChanger_Autoexec.txt") end end)
+    end
+    if legacyEnabled ~= nil then
+        local ae = scReadAutoexec()
+        ae.enabled = legacyEnabled
+        scWriteAutoexec(ae)
+    end
+
+    -- Cleanup unused legacy files
+    if delfile then
+        pcall(function() if isfile("SkinChanger_LastSkin.txt") then delfile("SkinChanger_LastSkin.txt") end end)
+        pcall(function() if isfile("SkinChanger_ManualAutoexecPath.txt") then delfile("SkinChanger_ManualAutoexecPath.txt") end end)
+    end
+end
+
+-- Run migration immediately
+pcall(scMigrateLegacy)
+
+----------------------------------------------------------------
 -- СОХРАНЕНИЕ / ЗАГРУЗКА (writefile / readfile)
 ----------------------------------------------------------------
 function saveSavedSkinsToFile()
@@ -222,18 +363,19 @@ function saveSavedSkinsToFile()
     end
 
     pcall(function()
-        local json = HttpService:JSONEncode(dataToSave)
-        writefile("SkinChanger_SavedSkins.json", json)
+        local bundle = scReadSkinsBundle()
+        bundle.savedSkins = dataToSave
+        scWriteSkinsBundle(bundle)
     end)
 end
 
 function loadSavedSkinsFromFile()
     if not readfile or not isfile then return end
-    if not isfile("SkinChanger_SavedSkins.json") then return end
 
     pcall(function()
-        local json = readfile("SkinChanger_SavedSkins.json")
-        local dataLoaded = HttpService:JSONDecode(json)
+        local bundle = scReadSkinsBundle()
+        local dataLoaded = bundle.savedSkins
+        if type(dataLoaded) ~= "table" then return end
 
         for _, skinData in ipairs(dataLoaded) do
             local bodyColorsRestored = nil
@@ -545,7 +687,24 @@ end
 -- Create auto-inject script content (loads from GitHub)
 function createAutoInjectScriptContent()
     return [[-- SkinChanger Premium AutoInject
--- Auto-generated, loads the latest script from GitHub
+-- Auto-generated. Loads the latest script from GitHub only if autoexec is enabled.
+local AUTOEXEC_FLAG_FILE = "SkinChanger/SkinChanger_Autoexec"
+local enabled = false
+pcall(function()
+    if isfile and isfile(AUTOEXEC_FLAG_FILE) then
+        local raw = readfile(AUTOEXEC_FLAG_FILE)
+        if raw and raw ~= "" then
+            local HttpService = game:GetService("HttpService")
+            local data = HttpService:JSONDecode(raw)
+            if type(data) == "table" and data.enabled == true then
+                enabled = true
+            end
+        end
+    end
+end)
+if not enabled then
+    return -- user disabled autoexec; stay silent
+end
 local success, err = pcall(function()
     loadstring(game:HttpGet("]] .. SKINCHANGER_GITHUB_URL .. [["))()
 end)
@@ -593,17 +752,22 @@ function createAutoInjectScripts()
     return true, { getExecutorNameFromPath(path) }
 end
 
--- Remove auto-inject scripts from ALL candidate paths
+-- Remove auto-inject scripts from ALL candidate paths.
+-- Defense in depth: overwrite with empty content (no-op on load) THEN try delfile.
+-- Even if delfile is sandboxed and silently fails, the empty file won't load the script.
 function removeAutoInjectScripts()
-    if not delfile then return end
-    
     for _, folder in ipairs(AUTOEXEC_CANDIDATES) do
         local filePath = folder .. "/SkinChanger_AutoInject.lua"
-        pcall(function()
-            if isfile and isfile(filePath) then
-                delfile(filePath)
-            end
-        end)
+        -- 1) Overwrite with empty/no-op
+        if writefile then
+            pcall(function() writefile(filePath, "-- SkinChanger autoexec disabled\n") end)
+        end
+        -- 2) Try to delete
+        if delfile then
+            pcall(function()
+                if isfile and isfile(filePath) then delfile(filePath) end
+            end)
+        end
     end
 end
 
@@ -786,10 +950,16 @@ local activeShaderPreset = nil -- name of active preset
 local function applyShaderPreset(presetName)
     local preset = SHADER_PRESETS[presetName]
     if not preset then return end
-    if shaderActive then return end
+    -- If a different preset is already active, tear it down immediately first
+    if shaderActive then
+        removeShaderImmediate()
+    end
     shaderActive = true
     activeShaderPreset = presetName
-    saveLightingOriginals()
+    -- Only capture originals once (keep original values across preset swaps)
+    if not shaderOriginals or next(shaderOriginals) == nil then
+        saveLightingOriginals()
+    end
     
     local d = 1.5
     
@@ -907,6 +1077,32 @@ local function applyShaderPreset(presetName)
     shaderConnections.persist = persistConn
 end
 
+-- Immediate teardown without tweens (used for preset swapping)
+function removeShaderImmediate()
+    if not shaderActive then return end
+    shaderActive = false
+    activeShaderPreset = nil
+
+    for key, conn in pairs(shaderConnections) do
+        pcall(function() conn:Disconnect() end)
+        shaderConnections[key] = nil
+    end
+
+    -- Destroy effects synchronously
+    for _, name in ipairs({"SkinChanger_Atmosphere", "SkinChanger_SunRays", "SkinChanger_Bloom", "SkinChanger_ColorCorrection"}) do
+        local eff = Lighting:FindFirstChild(name)
+        if eff then pcall(function() eff:Destroy() end) end
+    end
+    shaderEffects = {}
+
+    if shaderGodRaysFolder then
+        pcall(function() shaderGodRaysFolder:Destroy() end)
+        shaderGodRaysFolder = nil
+    end
+    -- NOTE: we intentionally do NOT restore lighting originals here,
+    -- because a new preset will overwrite them right after.
+end
+
 local function removeShader()
     if not shaderActive then return end
     shaderActive = false
@@ -958,6 +1154,9 @@ local function removeShader()
         pcall(function() shaderGodRaysFolder:Destroy() end)
         shaderGodRaysFolder = nil
     end
+
+    -- Clear originals so next apply captures fresh Lighting (user may have changed game state)
+    shaderOriginals = nil
 end
 
 -- Backward-compat aliases (used by Close Script handler)
@@ -994,9 +1193,9 @@ function applySavedSkin(skinData)
     for i, skin in ipairs(savedSkins) do
         if skin.playerName == skinData.playerName and skin.userId == skinData.userId then
             lastAppliedSkinIndex = i
-            -- Save to file for autoexec
+            -- Save to autoexec file ONLY if autoexec is enabled
             pcall(function()
-                writefile("SkinChanger_LastSkin.txt", tostring(i))
+                scSetLastSkinIfAutoexec({ index = i })
             end)
             break
         end
@@ -3191,7 +3390,10 @@ function makeAvatarFallback(parent, userId)
     img.BackgroundColor3 = C.BLACK
     img.BackgroundTransparency = 0.05
     img.BorderSizePixel = 0
-    img.Image = "rbxthumb://type=AvatarHeadShot&id=" .. tostring(userId) .. "&w=150&h=150"
+    -- Full-body avatar (portrait), fitted so the whole character is visible
+    -- NOTE: valid rbxthumb type is "Avatar" (not "AvatarThumbnail"); sizes must be 100/352/720
+    img.Image = "rbxthumb://type=Avatar&id=" .. tostring(userId) .. "&w=352&h=352"
+    img.ScaleType = Enum.ScaleType.Fit
     img.ZIndex = 2
     img.Parent = parent
     corner(img, 8)
@@ -3939,10 +4141,8 @@ function g_putOnGlasses()
         return
     end
     g_isAnimating = true
-    -- Save glasses state to file for autoexec
-    pcall(function()
-        writefile("SkinChanger_GlassesState.txt", "open")
-    end)
+    -- Save glasses state
+    pcall(function() scSetGlassesState("open") end)
     local P = G_POSES[g_rigType]
 
     -- Remove skin's glasses accessories
@@ -4063,10 +4263,8 @@ function g_takeOffGlasses()
     if g_isAnimating or not g_glassesOpen then return end
     if not g_rightShoulder then return end
     g_isAnimating = true
-    -- Save glasses state to file for autoexec
-    pcall(function()
-        writefile("SkinChanger_GlassesState.txt", "closed")
-    end)
+    -- Save glasses state
+    pcall(function() scSetGlassesState("closed") end)
     local P = G_POSES[g_rigType]
 
     -- 1) Рука к лицу
@@ -4908,6 +5106,34 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     if isBackSide then
         -- BACK SIDE: Settings content with Autoexec
 
+        -- Floating executor label (top-left corner)
+        local execLabel = Instance.new("TextLabel")
+        execLabel.Size = UDim2.fromOffset(160, 18)
+        execLabel.Position = UDim2.new(0, 16, 0, 6)
+        execLabel.BackgroundTransparency = 1
+        execLabel.Font = Enum.Font.GothamMedium
+        execLabel.TextSize = 11
+        execLabel.TextColor3 = Theme.primary
+        execLabel.TextTransparency = 0.25
+        execLabel.TextXAlignment = Enum.TextXAlignment.Left
+        local detected = nil
+        pcall(function() detected = detectCurrentExecutor() end)
+        local execName = detected and tostring(detected):upper() or "UNKNOWN"
+        execLabel.Text = "Executor: " .. execName
+        execLabel.Parent = root
+
+        -- Gentle floating animation
+        local execBaseY = 6
+        local execConn
+        execConn = RunService.RenderStepped:Connect(function()
+            if not execLabel or not execLabel.Parent then
+                if execConn then execConn:Disconnect() end
+                return
+            end
+            local dy = math.sin(tick() * 1.6) * 2.5
+            execLabel.Position = UDim2.new(0, 16, 0, execBaseY + dy)
+        end)
+
         -- Back button (top left to flip back)
         local backBtn = Instance.new("TextButton")
         backBtn.Size = UDim2.fromOffset(32, 32)
@@ -5008,6 +5234,9 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
             autoexecSlider.Text = autoexecEnabled and "ON" or "OFF"
             autoexecSlider.BackgroundColor3 = autoexecEnabled and Theme.primary or C.BLACK
             
+            -- Persist flag FIRST so the guarded auto-inject picks it up
+            pcall(function() scSetAutoexecEnabled(autoexecEnabled) end)
+            
             if autoexecEnabled then
                 local success, result = createAutoInjectScripts()
                 setupQueueOnTeleport()
@@ -5020,22 +5249,16 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                 removeAutoInjectScripts()
                 print("[SkinChanger] Autoexec disabled")
             end
-            
-            pcall(function()
-                writefile("SkinChanger_Autoexec.txt", tostring(autoexecEnabled))
-            end)
         end)
 
         pcall(function()
-            if isfile("SkinChanger_Autoexec.txt") then
-                local content = readfile("SkinChanger_Autoexec.txt")
-                if content == "true" then
-                    autoexecEnabled = true
-                    autoexecSlider.Text = "ON"
-                    autoexecSlider.BackgroundColor3 = Theme.primary
-                    createAutoInjectScripts()
-                    setupQueueOnTeleport()
-                end
+            if scIsAutoexecEnabled() then
+                autoexecEnabled = true
+                autoexecSlider.Text = "ON"
+                autoexecSlider.BackgroundColor3 = Theme.primary
+                -- Re-write auto-inject + queue on teleport to keep it working after updates
+                createAutoInjectScripts()
+                setupQueueOnTeleport()
             end
         end)
 
@@ -5130,15 +5353,9 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
             btn.MouseButton1Click:Connect(function()
                 if activeShaderPreset == name then
-                    -- Toggle off
-                    removeShader()
+                    removeShader()  -- toggle off with fade
                 else
-                    -- Switch: remove current then apply new
-                    if shaderActive then
-                        removeShader()
-                        task.wait(0.15)
-                    end
-                    applyShaderPreset(name)
+                    applyShaderPreset(name)  -- handles swap atomically
                 end
                 refreshPresetButtons()
             end)
@@ -6468,103 +6685,91 @@ updatePlayersList()
 pcall(updateHeadIconViewport)
 
 -- Autoexec: Check if enabled and auto-apply last skin with retry logic
+-- IMPORTANT: if autoexec is DISABLED, do nothing at all — manual launch = clean UI
 task.spawn(function()
     pcall(function()
-        if isfile("SkinChanger_Autoexec.txt") then
-            local content = readfile("SkinChanger_Autoexec.txt")
-            if content == "true" then
-                print("[SkinChanger Autoexec] Starting auto-apply sequence...")
-                -- Re-queue teleport loader (in case of next teleport)
-                pcall(setupQueueOnTeleport)
-                -- Re-write autoexec files (in case executor was reinstalled/updated)
-                pcall(createAutoInjectScripts)
-                
-                -- Wait for character to load (with timeout)
-                local charLoaded = false
-                local waitStart = tick()
-                while tick() - waitStart < 15 do
-                    if player.Character and player.Character:FindFirstChild("Humanoid") 
-                       and player.Character:FindFirstChild("Head") then
-                        charLoaded = true
-                        break
-                    end
-                    task.wait(0.5)
-                end
-                
-                if not charLoaded then
-                    warn("[SkinChanger Autoexec] Character failed to load within timeout")
-                    return
-                end
-                
-                -- Additional wait for character to fully initialize
-                task.wait(1)
-                
-                -- Load last applied skin index
-                local lastSkinIndex = nil
-                if isfile("SkinChanger_LastSkin.txt") then
-                    lastSkinIndex = tonumber(readfile("SkinChanger_LastSkin.txt"))
-                    print("[SkinChanger Autoexec] Last skin index: " .. tostring(lastSkinIndex))
-                end
-                
-                -- Apply last saved skin if exists (with retry)
-                local skinToApply = nil
-                if lastSkinIndex and savedSkins and savedSkins[lastSkinIndex] then
-                    skinToApply = savedSkins[lastSkinIndex]
-                elseif savedSkins and #savedSkins > 0 then
-                    skinToApply = savedSkins[1]
-                    print("[SkinChanger Autoexec] Using fallback skin")
-                end
-                
-                if skinToApply then
-                    -- Retry skin application up to 3 times
-                    for attempt = 1, 3 do
-                        local success, err = pcall(function()
-                            applySavedSkin(skinToApply)
-                        end)
-                        if success then
-                            print("[SkinChanger Autoexec] Skin applied successfully (attempt " .. attempt .. ")")
-                            break
-                        else
-                            warn("[SkinChanger Autoexec] Skin apply failed (attempt " .. attempt .. "): " .. tostring(err))
-                            if attempt < 3 then
-                                task.wait(1)
-                            end
-                        end
-                    end
+        local ae = scReadAutoexec()
+        if not ae.enabled then return end
+        print("[SkinChanger Autoexec] Starting auto-apply sequence...")
+        -- Re-queue teleport loader (in case of next teleport)
+        pcall(setupQueueOnTeleport)
+        -- Re-write auto-inject file (in case executor was reinstalled/updated)
+        pcall(createAutoInjectScripts)
+
+        -- Wait for character to load (with timeout)
+        local charLoaded = false
+        local waitStart = tick()
+        while tick() - waitStart < 15 do
+            if player.Character and player.Character:FindFirstChild("Humanoid")
+               and player.Character:FindFirstChild("Head") then
+                charLoaded = true
+                break
+            end
+            task.wait(0.5)
+        end
+
+        if not charLoaded then
+            warn("[SkinChanger Autoexec] Character failed to load within timeout")
+            return
+        end
+
+        -- Additional wait for character to fully initialize
+        task.wait(1)
+
+        -- Load last applied skin index from autoexec file
+        local lastSkinIndex = nil
+        if type(ae.lastSkin) == "table" and type(ae.lastSkin.index) == "number" then
+            lastSkinIndex = ae.lastSkin.index
+            print("[SkinChanger Autoexec] Last skin index: " .. tostring(lastSkinIndex))
+        end
+
+        local skinToApply = nil
+        if lastSkinIndex and savedSkins and savedSkins[lastSkinIndex] then
+            skinToApply = savedSkins[lastSkinIndex]
+        elseif savedSkins and #savedSkins > 0 then
+            skinToApply = savedSkins[1]
+            print("[SkinChanger Autoexec] Using fallback skin")
+        end
+
+        if skinToApply then
+            for attempt = 1, 3 do
+                local success, err = pcall(function()
+                    applySavedSkin(skinToApply)
+                end)
+                if success then
+                    print("[SkinChanger Autoexec] Skin applied successfully (attempt " .. attempt .. ")")
+                    break
                 else
-                    print("[SkinChanger Autoexec] No saved skins to apply")
+                    warn("[SkinChanger Autoexec] Skin apply failed (attempt " .. attempt .. "): " .. tostring(err))
+                    if attempt < 3 then task.wait(1) end
                 end
-                
-                -- Wait for skin to apply before equipping glasses
-                task.wait(1)
-                
-                -- Check glasses state and restore if they were open
-                local glassesState = "closed"
-                if isfile("SkinChanger_GlassesState.txt") then
-                    glassesState = readfile("SkinChanger_GlassesState.txt")
-                end
-                
-                if glassesState == "open" then
-                    print("[SkinChanger Autoexec] Restoring glasses state...")
-                    -- Wait for g_putOnGlasses to be available
-                    local glassesWaitStart = tick()
-                    while tick() - glassesWaitStart < 5 do
-                        if g_putOnGlasses and not g_glassesOpen then
-                            local success, err = pcall(g_putOnGlasses)
-                            if success then
-                                print("[SkinChanger Autoexec] Glasses equipped successfully")
-                            else
-                                warn("[SkinChanger Autoexec] Failed to equip glasses: " .. tostring(err))
-                            end
-                            break
-                        end
-                        task.wait(0.2)
+            end
+        else
+            print("[SkinChanger Autoexec] No saved skins to apply")
+        end
+
+        task.wait(1)
+
+        -- Check glasses state and restore if they were open
+        local glassesState = (scReadSkinsBundle().glassesState) or "closed"
+        if glassesState == "open" then
+            print("[SkinChanger Autoexec] Restoring glasses state...")
+            local glassesWaitStart = tick()
+            while tick() - glassesWaitStart < 5 do
+                if g_putOnGlasses and not g_glassesOpen then
+                    local success, err = pcall(g_putOnGlasses)
+                    if success then
+                        print("[SkinChanger Autoexec] Glasses equipped successfully")
+                    else
+                        warn("[SkinChanger Autoexec] Failed to equip glasses: " .. tostring(err))
                     end
+                    break
                 end
-                
-                print("[SkinChanger Autoexec] Auto-apply sequence completed")
+                task.wait(0.2)
             end
         end
+
+        print("[SkinChanger Autoexec] Auto-apply sequence completed")
     end)
 end)
 -- Меню стартует скрытым; HeadIcon видна, Insert/click открывает.
