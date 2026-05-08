@@ -695,13 +695,46 @@ function getExecutorNameFromPath(path)
 end
 
 -- GitHub raw URL for the main script
-local SKINCHANGER_GITHUB_URL = "https://raw.githubusercontent.com/brsssddaa/Skin-Changer/refs/heads/main/Skin%20Changer"
+local SKINCHANGER_GITHUB_URL = "https://raw.githubusercontent.com/brsssddaa/Skin-Changer/main/Skin%20Changer"
+
+-- Save current script to local cache for autoexec
+function saveScriptToLocalCache()
+    if not writefile then return false end
+    ensureSkinChangerDir()
+    pcall(function()
+        local scriptContent = readfile and readfile("Skin changer Remake.lua") or ""
+        if scriptContent and scriptContent ~= "" then
+            -- Detect executor and use appropriate path
+            local mainScriptPath = "SkinChanger/SkinChanger_Main.lua"
+            local executorName = detectCurrentExecutor()
+            if executorName and executorName:find("xeno") then
+                mainScriptPath = "../workspace/SkinChanger/SkinChanger_Main.lua"
+                -- Ensure workspace/SkinChanger folder exists
+                pcall(function()
+                    if isfolder and not isfolder("../workspace/SkinChanger") then
+                        makefolder("../workspace/SkinChanger")
+                    end
+                end)
+            end
+            writefile(mainScriptPath, scriptContent)
+        end
+    end)
+end
 
 -- Queue loadstring on teleport (works for in-session teleports across ALL executors)
 -- Guarded: checks autoexec flag before loading, so disabling autoexec takes effect on next teleport.
 function setupQueueOnTeleport()
+    -- Detect executor and use appropriate path
+    local autoexecPath = "SkinChanger/SkinChanger_Autoexec"
+    local cachePath = "SkinChanger/SkinChanger_Main.lua"
+    local executorName = detectCurrentExecutor()
+    if executorName and executorName:find("xeno") then
+        autoexecPath = "../workspace/SkinChanger/SkinChanger_Autoexec"
+        cachePath = "../workspace/SkinChanger/SkinChanger_Main.lua"
+    end
+
     local code = [[
-local ok, raw = pcall(function() return readfile and isfile and isfile("SkinChanger/SkinChanger_Autoexec") and readfile("SkinChanger/SkinChanger_Autoexec") end)
+local ok, raw = pcall(function() return readfile and isfile and isfile("]] .. autoexecPath .. [[") and readfile("]] .. autoexecPath .. [[") end)
 if not ok or not raw or raw == "" then return end
 local decodeOk, data = pcall(function() return game:GetService("HttpService"):JSONDecode(raw) end)
 if not decodeOk or type(data) ~= "table" or data.enabled ~= true then return end
@@ -711,8 +744,8 @@ local function tryLoad()
     local sc = nil
     -- 1) Local cache (saved from first run)
     pcall(function()
-        if readfile and isfile and isfile("SkinChanger/SkinChanger_Main.lua") then
-            sc = readfile("SkinChanger/SkinChanger_Main.lua")
+        if readfile and isfile and isfile("]] .. cachePath .. [[") then
+            sc = readfile("]] .. cachePath .. [[")
         end
     end)
     -- 2) Fallback to GitHub
@@ -751,6 +784,15 @@ end
 
 -- Create auto-inject script content (loads from local cache or GitHub)
 function createAutoInjectScriptContent()
+    -- Detect executor and use appropriate path
+    local autoexecPath = "SkinChanger/SkinChanger_Autoexec"
+    local mainScriptPath = "SkinChanger/SkinChanger_Main.lua"
+    local executorName = detectCurrentExecutor()
+    if executorName and executorName:find("xeno") then
+        autoexecPath = "../workspace/SkinChanger/SkinChanger_Autoexec"
+        mainScriptPath = "../workspace/SkinChanger/SkinChanger_Main.lua"
+    end
+
     return [[-- SkinChanger Premium AutoInject
 -- Auto-generated. Loads from local cache or GitHub, with character-ready guard.
 
@@ -759,8 +801,8 @@ local function tryLoad()
 
     -- 1) Try local cache first (saved from first manual run)
     pcall(function()
-        if readfile and isfile and isfile("SkinChanger/SkinChanger_Main.lua") then
-            sc = readfile("SkinChanger/SkinChanger_Main.lua")
+        if readfile and isfile and isfile("]] .. mainScriptPath .. [[") then
+            sc = readfile("]] .. mainScriptPath .. [[")
         end
     end)
 
@@ -793,9 +835,9 @@ local function tryLoad()
 end
 
 local enabled = false
-if isfile and isfile("SkinChanger/SkinChanger_Autoexec") then
+if isfile and isfile("]] .. autoexecPath .. [[") then
     local HttpService = game:GetService("HttpService")
-    local ok, raw = pcall(readfile, "SkinChanger/SkinChanger_Autoexec")
+    local ok, raw = pcall(readfile, "]] .. autoexecPath .. [[")
     if ok and raw and raw ~= "" then
         local decodeOk, data = pcall(function() return HttpService:JSONDecode(raw) end)
         if decodeOk and type(data) == "table" and data.enabled == true then
@@ -6159,6 +6201,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                     end
                 end)
                 local success, result = createAutoInjectScripts()
+                pcall(saveScriptToLocalCache)
                 setupQueueOnTeleport()
                 if success then
                 end
@@ -6171,6 +6214,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
             if scIsAutoexecEnabled() then
                 updateToggleState(true)
                 -- Re-write auto-inject + queue on teleport to keep it working after updates
+                pcall(saveScriptToLocalCache)
                 createAutoInjectScripts()
                 setupQueueOnTeleport()
             end
@@ -7736,6 +7780,8 @@ task.spawn(function()
     pcall(function()
         local ae = scReadAutoexec()
         if not ae.enabled then return end
+        -- Save current script to local cache for autoexec
+        pcall(saveScriptToLocalCache)
         -- Re-queue teleport loader (in case of next teleport)
         pcall(setupQueueOnTeleport)
         -- Re-write auto-inject file (in case executor was reinstalled/updated)
