@@ -3610,7 +3610,15 @@ function buildViewportFromCharacter(viewport, charSource)
         end
 
         clone.Parent = worldModel
-        pcall(function() clone:PivotTo(CFrame.new(0, 0, 0)) end)
+        pcall(function()
+            clone:PivotTo(CFrame.new(0, 0, 0))
+            local pp = clone.PrimaryPart or clone:FindFirstChild("HumanoidRootPart") or clone:FindFirstChild("Head")
+            if pp then
+                local _, yaw = pp.CFrame:ToOrientation()
+                -- Normalize model so its Roblox front (-Z) looks toward the viewport camera.
+                clone:PivotTo(CFrame.Angles(0, -yaw, 0))
+            end
+        end)
 
         -- Анкеруем все части для корректного рендера в WorldModel
         for _, p in ipairs(clone:GetDescendants()) do
@@ -4880,8 +4888,13 @@ function updateHeadIconViewport()
                     head.Transparency = 0
                     head.CanCollide = false
                     head.Anchored = true
+                    pcall(function()
+                        local pp = model.PrimaryPart or model:FindFirstChild("HumanoidRootPart") or head
+                        local _, yaw = pp.CFrame:ToOrientation()
+                        model:PivotTo(CFrame.Angles(0, -yaw, 0))
+                    end)
                     headIconCamera.FieldOfView = 30
-                    -- Camera at -Z side looking toward +Z (head face decal is on -Z front)
+                    -- Camera at -Z side looking toward +Z (Roblox face/front is -Z)
                     headIconCamera.CFrame = CFrame.new(head.Position + Vector3.new(0, 0, -4.5), head.Position)
                 else
                     -- Fallback to fixed position (camera at -Z to see face)
