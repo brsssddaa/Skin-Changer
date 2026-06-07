@@ -88,6 +88,26 @@ do
             _x.MouseButton1Click:Connect(_cl)
             task.delay(10,_cl)
         end)
+        -- Re-queue for next server so autoexec works on R6 after R15
+        pcall(function()
+            local _qFn = (type(queue_on_teleport)=="function" and queue_on_teleport)
+                      or (syn and type(syn.queue_on_teleport)=="function" and syn.queue_on_teleport)
+                      or (type(queueonteleport)=="function" and queueonteleport)
+            if not _qFn then return end
+            local _ap = "SkinChanger/SkinChanger_Autoexec"
+            local _mp = "SkinChanger/SkinChanger_Main.lua"
+            local parts = {
+                "local ok,raw=pcall(function() return readfile and isfile ",
+                "and isfile(\"" .. _ap .. "\") and readfile(\"" .. _ap .. "\") end) ",
+                "if not ok or not raw or raw==\"\" then return end ",
+                "local ok2,d=pcall(function() return game:GetService(\"HttpService\"):JSONDecode(raw) end) ",
+                "if not ok2 or type(d)~=\"table\" or d.enabled~=true then return end ",
+                "local sc pcall(function() if readfile and isfile and isfile(\"" .. _mp .. "\") ",
+                "then sc=readfile(\"" .. _mp .. "\") end end) ",
+                "if sc and sc~=\"\" then local ok3,fn=pcall(loadstring,sc) if ok3 and fn then task.spawn(fn) end end"
+            }
+            pcall(_qFn, table.concat(parts))
+        end)
         return
     end
 end
@@ -2339,14 +2359,26 @@ function captureSkinSnapshot(targetPlayer)
 
     local tHead = targetChar:FindFirstChild("Head")
     if tHead then
-        local f = tHead:FindFirstChild("face")
-        if f then skinData.face = f.Texture end
+        local faceTex = ""
+        local _fd = tHead:FindFirstChild("face")
+        if _fd and _fd.Texture ~= "" then
+            faceTex = _fd.Texture
+        else
+            pcall(function()
+                local hum = targetChar:FindFirstChildOfClass("Humanoid")
+                if hum then
+                    local desc = hum:GetAppliedDescription()
+                    if desc and desc.Face and desc.Face > 0 then
+                        faceTex = "rbxassetid://" .. tostring(desc.Face)
+                    end
+                end
+            end)
+        end
+        if faceTex ~= "" then skinData.face = faceTex end
         local m = tHead:FindFirstChildOfClass("SpecialMesh")
         if m then
             local clone = m:Clone()
-            if clone then
-                skinData.headMesh = clone
-            end
+            if clone then skinData.headMesh = clone end
         end
     end
 
