@@ -493,14 +493,9 @@ if not okLoad then
     warn("[SkinChanger] Critical error loading saved skins:", errLoad)
 end
 
--- Disable autoexec on manual launch to prevent conflicts after rejoin
--- This ensures the script can be opened even if autoexec was enabled before
-pcall(function()
-    if scIsAutoexecEnabled() then
-        warn("[SkinChanger] Autoexec was enabled, disabling on manual launch")
-        scSetAutoexecEnabled(false)
-    end
-end)
+-- Autoexec flag must stay persistent across launches.
+-- Do NOT disable it here: the guarded auto-inject script already checks this flag.
+-- Disabling on startup caused the world-menu slider to turn off after first auto launch.
 
 ----------------------------------------------------------------
 -- AUTOEXEC MULTI-EXECUTOR SUPPORT
@@ -1687,7 +1682,6 @@ function applySkin(targetPlayer)
     lastAppliedPlayer = targetPlayer
     lastAppliedSkinUserId = targetPlayer.UserId
     lastAppliedSkinClone = nil
-    if setHeadIconAvatar then setHeadIconAvatar(targetPlayer.UserId) end
 
     savedSkinData = {
         playerName      = targetPlayer.Name,
@@ -1699,6 +1693,17 @@ function applySkin(targetPlayer)
         characterMeshes = {},
         accessories     = {},
     }
+
+    -- Capture a frozen clone for HeadIcon before any delayed viewport update.
+    -- This fixes live player skins showing only a plain head without hair/accessories.
+    pcall(function()
+        local clone = targetChar:Clone()
+        if clone then
+            lastAppliedSkinClone = clone
+            savedSkinData.characterClone = clone
+        end
+    end)
+    if setHeadIconAvatar then setHeadIconAvatar(targetPlayer.UserId) end
 
     for _, item in ipairs(targetChar:GetChildren()) do
         if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
@@ -4772,27 +4777,38 @@ function updateHeadIconViewport()
     if savedSkinData and headIconViewport and headIconCamera then
         local rendered = false
 
-        -- 1) Try buildSkinModel (works for skins loaded from disk)
-        local ok1, builtModel = pcall(buildSkinModel, savedSkinData)
-        if ok1 and builtModel then
-            local ok2 = pcall(function()
-                -- Manually place in viewport without drag/rotate
-                local worldModel = headIconViewport:FindFirstChildOfClass("WorldModel")
-                if not worldModel then
-                    worldModel = Instance.new("WorldModel")
-                    worldModel.Parent = headIconViewport
-                end
-                for _, c in ipairs(worldModel:GetChildren()) do c:Destroy() end
-                if builtModel.PrimaryPart then
-                    builtModel:PivotTo(CFrame.new(0, 0, 0))
-                end
-                builtModel.Parent = worldModel
-                return true
+        -- 1) Prefer in-session characterClone for live players.
+        -- It keeps current accessories, hair, layered items and custom face exactly as seen in-game.
+        if lastAppliedSkinClone then
+            local ok = pcall(function()
+                buildViewportFromCharacter(headIconViewport, lastAppliedSkinClone)
             end)
-            if ok2 then rendered = true else pcall(function() builtModel:Destroy() end) end
+            if ok then rendered = true end
         end
 
-        -- 2) Fallback to in-session characterClone
+        -- 2) Fallback to buildSkinModel (works for skins loaded from disk)
+        if not rendered then
+            local ok1, builtModel = pcall(buildSkinModel, savedSkinData)
+            if ok1 and builtModel then
+                local ok2 = pcall(function()
+                    -- Manually place in viewport without drag/rotate
+                    local worldModel = headIconViewport:FindFirstChildOfClass("WorldModel")
+                    if not worldModel then
+                        worldModel = Instance.new("WorldModel")
+                        worldModel.Parent = headIconViewport
+                    end
+                    for _, c in ipairs(worldModel:GetChildren()) do c:Destroy() end
+                    if builtModel.PrimaryPart then
+                        builtModel:PivotTo(CFrame.new(0, 0, 0))
+                    end
+                    builtModel.Parent = worldModel
+                    return true
+                end)
+                if ok2 then rendered = true else pcall(function() builtModel:Destroy() end) end
+            end
+        end
+
+        -- 3) Last fallback to in-session characterClone
         if not rendered and lastAppliedSkinClone then
             local ok = pcall(function()
                 buildViewportFromCharacter(headIconViewport, lastAppliedSkinClone)
