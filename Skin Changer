@@ -10,6 +10,88 @@ local HttpService, CoreGui, ContextActionService = gs(game, "HttpService"), gs(g
 
 local player = Players.LocalPlayer
 
+
+-- R15 CHECK: blocks script and shows notice on R15 servers
+-- Runs on both manual start and autoexec
+do
+    -- Wait for game to fully load (critical for autoexec)
+    if not game:IsLoaded() then
+        game.Loaded:Wait()
+    end
+    task.wait(0.3)
+
+    -- Wait for local character via Heartbeat
+    local _rdy = false
+    local _rc = RunService.Heartbeat:Connect(function()
+        if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then _rdy = true end
+    end)
+    local _t0 = tick()
+    repeat task.wait(0.05) until _rdy or (tick()-_t0 > 30)
+    _rc:Disconnect()
+
+    local function _isR15(char)
+        if not char then return false end
+        local h = char:FindFirstChildOfClass("Humanoid")
+        if h and tostring(h.RigType):find("R15") then return true end
+        return char:FindFirstChild("UpperTorso") ~= nil or char:FindFirstChild("LowerTorso") ~= nil
+    end
+
+    local _r15 = _isR15(player.Character)
+    if not _r15 then
+        for _, _p in ipairs(Players:GetPlayers()) do
+            if _isR15(_p.Character) then _r15=true; break end
+        end
+    end
+
+    if _r15 then
+        pcall(function()
+            local _g = Instance.new("ScreenGui")
+            _g.Name="SC_R15Notice"; _g.ResetOnSpawn=false; _g.DisplayOrder=999
+            _g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
+            local _f=Instance.new("Frame",_g)
+            _f.Size=UDim2.new(0,320,0,92); _f.Position=UDim2.new(1,20,1,-110)
+            _f.AnchorPoint=Vector2.new(0,1); _f.BackgroundColor3=Color3.fromRGB(28,28,28)
+            _f.BorderSizePixel=0
+            Instance.new("UICorner",_f).CornerRadius=UDim.new(0,8)
+            local _sk=Instance.new("UIStroke",_f)
+            _sk.Color=Color3.fromRGB(255,255,255);_sk.Thickness=1;_sk.Transparency=0.8
+            local _ac=Instance.new("Frame",_f)
+            _ac.Size=UDim2.new(0,4,1,-16);_ac.Position=UDim2.new(0,8,0,8)
+            _ac.BackgroundColor3=Color3.fromRGB(230,60,60);_ac.BorderSizePixel=0
+            Instance.new("UICorner",_ac).CornerRadius=UDim.new(1,0)
+            local _tl=Instance.new("TextLabel",_f)
+            _tl.Size=UDim2.new(1,-50,0,22);_tl.Position=UDim2.new(0,20,0,10)
+            _tl.BackgroundTransparency=1;_tl.Text="Skin Changer"
+            _tl.TextColor3=Color3.fromRGB(255,255,255)
+            _tl.Font=Enum.Font.GothamBold;_tl.TextSize=15
+            _tl.TextXAlignment=Enum.TextXAlignment.Left
+            local _md=Instance.new("TextLabel",_f)
+            _md.Size=UDim2.new(1,-28,0,46);_md.Position=UDim2.new(0,20,0,36)
+            _md.BackgroundTransparency=1
+            _md.Text="R15 rigs are not supported.\nThis script only works on R6 servers."
+            _md.TextColor3=Color3.fromRGB(175,175,175)
+            _md.Font=Enum.Font.Gotham;_md.TextSize=13
+            _md.TextXAlignment=Enum.TextXAlignment.Left;_md.TextWrapped=true
+            local _x=Instance.new("TextButton",_f)
+            _x.Size=UDim2.new(0,26,0,26);_x.Position=UDim2.new(1,-32,0,5)
+            _x.BackgroundTransparency=1;_x.Text="X"
+            _x.TextColor3=Color3.fromRGB(155,155,155)
+            _x.Font=Enum.Font.GothamBold;_x.TextSize=14
+            _g.Parent=player:WaitForChild("PlayerGui",10)
+            TweenService:Create(_f,TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
+                {Position=UDim2.new(1,-332,1,-110)}):Play()
+            local function _cl()
+                TweenService:Create(_f,TweenInfo.new(0.25,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
+                    {Position=UDim2.new(1,20,1,-110)}):Play()
+                task.delay(0.3,function() pcall(function() _g:Destroy() end) end)
+            end
+            _x.MouseButton1Click:Connect(_cl)
+            task.delay(10,_cl)
+        end)
+        return
+    end
+end
+
 -- Singleton guard: prevents duplicated menus/connections when autoexec and queue_on_teleport
 -- both run the same script, or when old autoexec files were left in several folders.
 pcall(function()
@@ -1784,10 +1866,40 @@ function applySkin(targetPlayer)
     end
     for _, item in ipairs(targetChar:GetChildren()) do
         if item:IsA("Accessory") then
-            local clone = item:Clone()
-            if clone then
-                table.insert(savedSkinData.accessories, clone)
-            end
+            -- Convert to table format so buildSkinModel positions correctly via attachments
+            pcall(function()
+                local handle = item:FindFirstChild("Handle", true)
+                if not handle or not handle:IsA("BasePart") then return end
+                local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                local att  = handle:FindFirstChildOfClass("Attachment")
+                local meshId, textureId = "", ""
+                local meshScale = {1, 1, 1}
+                if handle:IsA("MeshPart") then
+                    meshId = handle.MeshId; textureId = handle.TextureID
+                elseif mesh then
+                    meshId = mesh.MeshId; textureId = mesh.TextureId
+                    meshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
+                end
+                if meshId == "" then return end
+                local accData = {
+                    Name               = item.Name,
+                    MeshId             = meshId,
+                    TextureId          = textureId,
+                    MeshScale          = meshScale,
+                    AttachmentName     = att and att.Name or "",
+                    AttachmentCFrame   = {},
+                    HandleSize         = {handle.Size.X, handle.Size.Y, handle.Size.Z},
+                    HandleTransparency = handle.Transparency,
+                    IsMeshPart         = handle:IsA("MeshPart"),
+                }
+                if att then
+                    local x,y,z,r00,r01,r02,r10,r11,r12,r20,r21,r22 = att.CFrame:GetComponents()
+                    accData.AttachmentCFrame = {x,y,z,r00,r01,r02,r10,r11,r12,r20,r21,r22}
+                end
+                if accData.AttachmentName ~= "" then
+                    table.insert(savedSkinData.accessories, accData)
+                end
+            end)
         end
     end
 
@@ -1905,40 +2017,82 @@ function applySkin(targetPlayer)
     if player.Character and savedSkinData and savedSkinData.accessories then
         for _, accessory in ipairs(savedSkinData.accessories) do
             pcall(function()
-                -- Skip glasses accessories
-                local accName = accessory.Name or ""
+                local accName = (type(accessory) == "table") and (accessory.Name or "") or accessory.Name
                 local nameLower = accName:lower()
-                if nameLower:find("glass") or nameLower:find("очк") or nameLower:find("thinround") or nameLower:find("slot20") or nameLower:find("eyewear") or nameLower:find("sunglasses") or nameLower:find("shades") or nameLower:find("specs") or nameLower:find("visor") then
+                if nameLower:find("glass") or nameLower:find("thinround") or nameLower:find("slot20")
+                   or nameLower:find("eyewear") or nameLower:find("sunglasses") or nameLower:find("shades")
+                   or nameLower:find("specs") or nameLower:find("visor") then
                     return
                 end
 
-                local handle = accessory:FindFirstChild("Handle", true)
-                if not handle then return end
-                local ha = handle:FindFirstChildOfClass("Attachment")
-                if not ha then return end
+                local meshId, textureId, meshScale, attName, attCF, handleSize, isMeshPart, handleTransp
 
+                if type(accessory) == "table" then
+                    -- Table format (new): use stored data directly
+                    meshId       = accessory.MeshId or ""
+                    textureId    = accessory.TextureId or ""
+                    meshScale    = accessory.MeshScale or {1,1,1}
+                    attName      = accessory.AttachmentName or ""
+                    handleSize   = accessory.HandleSize or {1,1,1}
+                    isMeshPart   = accessory.IsMeshPart or false
+                    handleTransp = accessory.HandleTransparency or 0
+                    if accessory.AttachmentCFrame and #accessory.AttachmentCFrame == 12 then
+                        attCF = CFrame.new(unpack(accessory.AttachmentCFrame))
+                    else
+                        attCF = CFrame.new()
+                    end
+                else
+                    -- Instance format (legacy): extract from Accessory object
+                    local handle = accessory:FindFirstChild("Handle", true)
+                    if not handle then return end
+                    local ha = handle:FindFirstChildOfClass("Attachment")
+                    if not ha then return end
+                    local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                    if handle:IsA("MeshPart") then
+                        meshId = handle.MeshId; textureId = handle.TextureID
+                        meshScale = {1,1,1}
+                    elseif mesh then
+                        meshId = mesh.MeshId; textureId = mesh.TextureId
+                        meshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
+                    else return end
+                    attName      = ha.Name
+                    attCF        = ha.CFrame
+                    handleSize   = {handle.Size.X, handle.Size.Y, handle.Size.Z}
+                    isMeshPart   = handle:IsA("MeshPart")
+                    handleTransp = handle.Transparency
+                end
+
+                if meshId == "" or attName == "" then return end
+
+                -- Find matching attachment on player character
                 local myAttachment, myPart = nil, nil
                 for _, part in ipairs(player.Character:GetChildren()) do
                     if part:IsA("BasePart") then
-                        local att = part:FindFirstChild(ha.Name)
-                        if att then myAttachment=att; myPart=part; break end
+                        local att = part:FindFirstChild(attName)
+                        if att and att:IsA("Attachment") then
+                            myAttachment = att; myPart = part; break
+                        end
                     end
                 end
                 if not myAttachment then return end
 
-                local vh = handle:Clone()
-                if not vh then return end
-                vh.Name = "ACC_" .. accessory.Name
-                vh.CanCollide=false; vh.Massless=true; vh.Anchored=true
-                for _, child in ipairs(vh:GetChildren()) do
-                    if not child:IsA("SpecialMesh") and not child:IsA("Decal")
-                       and not child:IsA("Texture") and not child:IsA("SurfaceAppearance") then
-                        child:Destroy()
-                    end
-                end
+                -- Create visual handle part
+                local vh = Instance.new("Part")
+                vh.Name = "ACC_" .. accName
+                vh.Size = Vector3.new(unpack(handleSize))
+                vh.Transparency = handleTransp
+                vh.CanCollide = false; vh.Massless = true; vh.Anchored = true
+                vh.TopSurface = Enum.SurfaceType.Smooth
+                vh.BottomSurface = Enum.SurfaceType.Smooth
+                local vmesh = Instance.new("SpecialMesh")
+                vmesh.MeshType = Enum.MeshType.FileMesh
+                vmesh.MeshId   = meshId
+                vmesh.TextureId = textureId
+                vmesh.Scale    = Vector3.new(unpack(meshScale))
+                vmesh.Parent   = vh
                 vh.Parent = player.Character
 
-                local offset = ha.CFrame
+                local offset = attCF
                 local _accConn
                 _accConn = RunService.RenderStepped:Connect(function()
                     if not vh.Parent or not myPart.Parent then
@@ -2212,10 +2366,41 @@ function captureSkinSnapshot(targetPlayer)
         -- Otherwise capture from character (both Accessory instances and ACC_ parts)
         for _, item in ipairs(targetChar:GetChildren()) do
             if item:IsA("Accessory") then
-                local clone = item:Clone()
-                if clone then
-                    table.insert(skinData.accessories, clone)
-                end
+                -- Convert to table format (same as saveSavedSkinsToFile)
+                -- so buildSkinModel can position via attachment points correctly.
+                pcall(function()
+                    local handle = item:FindFirstChild("Handle", true)
+                    if not handle or not handle:IsA("BasePart") then return end
+                    local mesh = handle:FindFirstChildOfClass("SpecialMesh")
+                    local att  = handle:FindFirstChildOfClass("Attachment")
+                    local meshId, textureId = "", ""
+                    local meshScale = {1, 1, 1}
+                    if handle:IsA("MeshPart") then
+                        meshId = handle.MeshId; textureId = handle.TextureID
+                    elseif mesh then
+                        meshId = mesh.MeshId; textureId = mesh.TextureId
+                        meshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
+                    end
+                    if meshId == "" then return end
+                    local accData = {
+                        Name               = item.Name,
+                        MeshId             = meshId,
+                        TextureId          = textureId,
+                        MeshScale          = meshScale,
+                        AttachmentName     = att and att.Name or "",
+                        AttachmentCFrame   = {},
+                        HandleSize         = {handle.Size.X, handle.Size.Y, handle.Size.Z},
+                        HandleTransparency = handle.Transparency,
+                        IsMeshPart         = handle:IsA("MeshPart"),
+                    }
+                    if att then
+                        local x,y,z,r00,r01,r02,r10,r11,r12,r20,r21,r22 = att.CFrame:GetComponents()
+                        accData.AttachmentCFrame = {x,y,z,r00,r01,r02,r10,r11,r12,r20,r21,r22}
+                    end
+                    if accData.AttachmentName ~= "" then
+                        table.insert(skinData.accessories, accData)
+                    end
+                end)
             end
         end
         -- Also capture ACC_ prefixed parts as accessories
@@ -3058,15 +3243,17 @@ function buildSkinModel(skinData)
     -- и при изменении Size части «отрываются» друг от друга.
 
     -- Head mesh (replace default SpecialMesh)
+    -- Head mesh: only apply standard MeshType.Head (skips Rthro/R15/FileMesh heads)
+    -- Reason: custom head meshes change visual head size but attachment points stay fixed,
+    -- causing accessories to appear oversized relative to the smaller head.
     if skinData.headMesh and parts.Head then
-        local oldMesh = parts.Head:FindFirstChildOfClass("SpecialMesh")
-        if oldMesh then oldMesh:Destroy() end
         local hm = skinData.headMesh
-        if typeof(hm) == "Instance" then
+        if typeof(hm) == "Instance" and hm:IsA("SpecialMesh")
+            and hm.MeshType == Enum.MeshType.Head then
+            local oldMesh = parts.Head:FindFirstChildOfClass("SpecialMesh")
+            if oldMesh then oldMesh:Destroy() end
             local clone = hm:Clone()
-            if clone then
-                clone.Parent = parts.Head
-            end
+            if clone then clone.Parent = parts.Head end
         end
     end
 
@@ -3511,9 +3698,9 @@ function buildViewportFromCharacter(viewport, charSource)
     local ok, err = pcall(function()
         local clone = charSource:Clone()
         if not clone then return end
-        -- Убираем скрипты и Animator — они мешают рендеру в ViewportFrame
+        -- Убираем скрипты, Animator и все AnimationTrack sources, чтобы snapshot не прыгал/не танцевал в ViewportFrame
         for _, obj in ipairs(clone:GetDescendants()) do
-            if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Animator") then
+            if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Animator") or obj:IsA("AnimationController") or obj:IsA("Animation") then
                 obj:Destroy()
             end
         end
@@ -3523,15 +3710,24 @@ function buildViewportFromCharacter(viewport, charSource)
                 hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
                 hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
                 hum.AutoRotate = false
+                hum.PlatformStand = true
+                hum.Sit = false
+            end)
+            pcall(function()
+                for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
+                    track:Stop(0)
+                    track:Destroy()
+                end
             end)
         end
         local hrp = clone:FindFirstChild("HumanoidRootPart")
         if not hrp then clone:Destroy(); return end
         if not clone.PrimaryPart then clone.PrimaryPart = hrp end
 
-        -- Сбрасываем Motor6D в дефолтную стойку (руки по швам)
+        -- Сбрасываем Motor6D/Transform в дефолтную стойку (руки по швам), убирая текущую позу танца/прыжка
         for _, part in ipairs(clone:GetDescendants()) do
             if part:IsA("Motor6D") then
+                pcall(function() part.Transform = CFrame.new() end)
                 local part0 = part.Part0
                 local part1 = part.Part1
                 if part0 and part1 then
@@ -3726,7 +3922,9 @@ function createPlayerCard(targetPlayer, layoutOrder)
     local light = Instance.new("PointLight")
     light.Brightness = 2; light.Range = 20; light.Parent = cam
 
-    -- Рендерим через buildViewportFromCharacter для сохранения аксессуаров
+    -- Player cards: mannequin-based approach (same as saved skins) = static T-pose.
+    -- buildViewportFromCharacter clones the live character WITH current animation pose.
+    -- buildSkinModel creates a fresh static mannequin instead, just like saved skins.
     local viewportOk = false
     local charSource
     if targetPlayer == player then
@@ -3735,19 +3933,18 @@ function createPlayerCard(targetPlayer, layoutOrder)
         charSource = targetPlayer.Character
     end
     if charSource then
-        viewportOk = buildViewportFromCharacter(viewport, charSource)
+        local snapshot = captureSkinSnapshot(targetPlayer)
+        if snapshot then
+            local okBuild, builtModel = pcall(buildSkinModel, snapshot)
+            if okBuild and builtModel then
+                viewportOk = buildViewportFromSkinModel(viewport, builtModel)
+                if not viewportOk then pcall(function() builtModel:Destroy() end) end
+            end
+        end
     end
-    -- Fallback: live-клон если buildSkinModel не сработал
-    if not viewportOk then
-        local charSource
-        if targetPlayer == player then
-            charSource = originalPlayerCharacter or player.Character
-        else
-            charSource = targetPlayer.Character
-        end
-        if charSource then
-            viewportOk = buildViewportFromCharacter(viewport, charSource)
-        end
+    -- Fallback: direct character clone if mannequin build failed
+    if not viewportOk and charSource then
+        viewportOk = buildViewportFromCharacter(viewport, charSource)
     end
     if not viewportOk then
         viewport:Destroy()
@@ -4835,21 +5032,12 @@ function updateHeadIconViewport()
     if savedSkinData and headIconViewport and headIconCamera then
         local rendered = false
 
-        -- 1) Prefer in-session characterClone for live players.
-        -- It keeps current accessories, hair, layered items and custom face exactly as seen in-game.
-        if lastAppliedSkinClone then
-            local ok = pcall(function()
-                buildViewportFromCharacter(headIconViewport, lastAppliedSkinClone)
-            end)
-            if ok then rendered = true end
-        end
-
-        -- 2) Fallback to buildSkinModel (works for skins loaded from disk)
+        -- 1) Prefer buildSkinModel: creates fresh static mannequin (no animation bake-in).
+        -- Same approach as saved skins - guarantees T-pose with all accessories.
         if not rendered then
             local ok1, builtModel = pcall(buildSkinModel, savedSkinData)
             if ok1 and builtModel then
                 local ok2 = pcall(function()
-                    -- Manually place in viewport without drag/rotate
                     local worldModel = headIconViewport:FindFirstChildOfClass("WorldModel")
                     if not worldModel then
                         worldModel = Instance.new("WorldModel")
@@ -6202,36 +6390,6 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
         contentLayout.SortOrder = Enum.SortOrder.LayoutOrder
         contentLayout.Parent = contentContainer
 
-        -- Special Features button
-        local specialFrame = Instance.new("Frame")
-        specialFrame.LayoutOrder = 1
-        specialFrame.Size = UDim2.new(1, 0, 0, 44)
-        specialFrame.BackgroundTransparency = 1
-        specialFrame.Parent = contentContainer
-
-        local specialBtn = Instance.new("TextButton")
-        specialBtn.Size = UDim2.new(1, -32, 1, 0)
-        specialBtn.Position = UDim2.new(0, 16, 0, 0)
-        specialBtn.BackgroundColor3 = C.BLACK
-        specialBtn.BackgroundTransparency = 0.2
-        specialBtn.Text = "Special Features"
-        specialBtn.TextColor3 = C.WHITE
-        specialBtn.Font = FONT_BOLD
-        specialBtn.TextSize = 16
-        specialBtn.TextXAlignment = Enum.TextXAlignment.Left
-        specialBtn.AutoButtonColor = false
-        specialBtn.Parent = specialFrame
-        wmCorner(specialBtn, 8)
-        wmStroke(specialBtn, Theme.primary, 1, 0.5)
-
-        local specialPad = Instance.new("UIPadding")
-        specialPad.PaddingLeft = UDim.new(0, 16)
-        specialPad.Parent = specialBtn
-
-        specialBtn.MouseButton1Click:Connect(function()
-            toggleSpecialFeaturesMenu()
-        end)
-
         -- Autoexec multi-executor section
         local autoexecFrame = Instance.new("Frame")
         autoexecFrame.LayoutOrder = 0
@@ -6322,120 +6480,6 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
                 createAutoInjectScripts()
                 setupQueueOnTeleport()
             end
-        end)
-
-        -- ============= SHADERPACK SECTION (collapsible category) =============
-        local presetOrder = {"Sunset", "Night"}
-        local presetCount = #presetOrder
-        local rowH = 32
-        local rowGap = 6
-        local listH = presetCount * (rowH + rowGap) + 36  -- + Special Features button height (30) + gap (6)
-        local headerH = 30
-
-        local shaderFrame = Instance.new("Frame")
-        shaderFrame.LayoutOrder = 2
-        shaderFrame.Size = UDim2.new(1, 0, 0, 24 + headerH + listH + 10)
-        shaderFrame.BackgroundTransparency = 1
-        shaderFrame.Parent = contentContainer
-
-        local shaderLabel = Instance.new("TextLabel")
-        shaderLabel.Size = UDim2.new(1, 0, 0, 24)
-        shaderLabel.Position = UDim2.new(0, 16, 0, 0)
-        shaderLabel.BackgroundTransparency = 1
-        shaderLabel.Text = "Shaderpack"
-        shaderLabel.TextColor3 = C.WHITE
-        shaderLabel.Font = FONT_BOLD
-        shaderLabel.TextSize = 18
-        shaderLabel.TextXAlignment = Enum.TextXAlignment.Left
-        shaderLabel.Parent = shaderFrame
-
-        -- Header button (toggle expand)
-        local shaderHeader = Instance.new("TextButton")
-        shaderHeader.Size = UDim2.new(1, -32, 0, headerH)
-        shaderHeader.Position = UDim2.new(0, 16, 0, 24)
-        shaderHeader.BackgroundColor3 = C.BLACK
-        shaderHeader.BackgroundTransparency = 0.2
-        shaderHeader.Text = "▶  Choose Pack"
-        shaderHeader.TextColor3 = C.WHITE
-        shaderHeader.Font = FONT_BOLD
-        shaderHeader.TextSize = 12
-        shaderHeader.AutoButtonColor = false
-        shaderHeader.Parent = shaderFrame
-        wmCorner(shaderHeader, 4)
-        wmStroke(shaderHeader, Theme.primary, 1, 0.5)
-
-        -- List container
-        local presetList = Instance.new("Frame")
-        presetList.Size = UDim2.new(1, -32, 0, 0)  -- Start collapsed
-        presetList.Position = UDim2.new(0, 16, 0, 24 + headerH + 6)
-        presetList.BackgroundTransparency = 1
-        presetList.Visible = true  -- Always visible, animate size instead
-        presetList.ClipsDescendants = true
-        presetList.Parent = shaderFrame
-
-        local listLayout = Instance.new("UIListLayout")
-        listLayout.Padding = UDim.new(0, rowGap)
-        listLayout.SortOrder = Enum.SortOrder.LayoutOrder
-        listLayout.Parent = presetList
-
-        local presetButtons = {}
-
-        local function refreshPresetButtons()
-            for name, btn in pairs(presetButtons) do
-                if not btn or not btn.Parent then return end
-                local active = (activeShaderPreset == name)
-                local preset = SHADER_PRESETS[name]
-                btn.Text = (active and "✓  " or "      ") .. preset.displayName
-                btn.BackgroundColor3 = active and Theme.primary or C.BLACK
-                btn.TextColor3 = active and C.BLACK or C.WHITE
-            end
-        end
-        refreshPresetButtonsGlobal = refreshPresetButtons
-        -- Initial refresh in case shader was auto-applied before panel built
-        task.defer(refreshPresetButtons)
-
-        for i, name in ipairs(presetOrder) do
-            local preset = SHADER_PRESETS[name]
-            local btn = Instance.new("TextButton")
-            btn.LayoutOrder = i
-            btn.Size = UDim2.new(1, 0, 0, rowH)
-            btn.BackgroundColor3 = C.BLACK
-            btn.BackgroundTransparency = 0.2
-            btn.Text = "      " .. preset.displayName
-            btn.TextColor3 = C.WHITE
-            btn.Font = FONT_BOLD
-            btn.TextSize = 12
-            btn.TextXAlignment = Enum.TextXAlignment.Left
-            btn.AutoButtonColor = false
-            btn.Parent = presetList
-            wmCorner(btn, 4)
-            wmStroke(btn, Theme.primary, 1, 0.6)
-
-            local pad = Instance.new("UIPadding")
-            pad.PaddingLeft = UDim.new(0, 12)
-            pad.Parent = btn
-
-            presetButtons[name] = btn
-
-            btn.MouseButton1Click:Connect(function()
-                if activeShaderPreset == name then
-                    removeShader()  -- toggle off with fade
-                else
-                    applyShaderPreset(name)  -- handles swap atomically
-                end
-                refreshPresetButtons()
-            end)
-        end
-
-        local expanded = false
-        shaderHeader.MouseButton1Click:Connect(function()
-            expanded = not expanded
-            if expanded then
-                tween(presetList, 0.35, {Size = UDim2.new(1, -32, 0, listH)}, Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-            else
-                tween(presetList, 0.25, {Size = UDim2.new(1, -32, 0, 0)}, Enum.EasingStyle.Quart, Enum.EasingDirection.In)
-            end
-            shaderHeader.Text = (expanded and "▼" or "▶") .. "  Choose Pack"
         end)
 
         return  -- Exit early for back side
@@ -6794,6 +6838,68 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
 
     -- REAL TIME section removed - duplicate clock
 
+
+    -- ===== 3. SPECIAL FEATURES =====
+    local s3 = makeSection(3, "Special Features", false)
+    s3.header.MouseButton1Click:Connect(function()
+        toggleSpecialFeaturesMenu()
+    end)
+
+    -- ===== 5. SHADERPACK =====
+    local s5 = makeSection(5, "Shaderpack", true)
+    do
+        local presetOrder2 = {"Sunset", "Night"}
+        local presetBtns2 = {}
+        local function refreshPresets2()
+            for name, btn in pairs(presetBtns2) do
+                if not btn or not btn.Parent then return end
+                local active = (activeShaderPreset == name)
+                local preset = SHADER_PRESETS[name]
+                btn.Text = (active and "V  " or "   ") .. preset.displayName
+                btn.BackgroundColor3 = active and Theme.primary or C.BLACK
+                btn.TextColor3 = active and C.BLACK or C.WHITE
+            end
+        end
+        local oldRefresh = refreshPresetButtonsGlobal
+        refreshPresetButtonsGlobal = function()
+            if oldRefresh then pcall(oldRefresh) end
+            pcall(refreshPresets2)
+        end
+        task.defer(refreshPresets2)
+        local btnLayout2 = Instance.new("UIListLayout")
+        btnLayout2.Padding = UDim.new(0, 6)
+        btnLayout2.SortOrder = Enum.SortOrder.LayoutOrder
+        btnLayout2.Parent = s5.content
+        for i, name in ipairs(presetOrder2) do
+            local preset = SHADER_PRESETS[name]
+            local btn = Instance.new("TextButton")
+            btn.LayoutOrder = i
+            btn.Size = UDim2.new(1, 0, 0, 36)
+            btn.BackgroundColor3 = C.BLACK
+            btn.BackgroundTransparency = 0.2
+            btn.Text = "   " .. preset.displayName
+            btn.TextColor3 = C.WHITE
+            btn.Font = FONT_BOLD
+            btn.TextSize = 14
+            btn.TextXAlignment = Enum.TextXAlignment.Left
+            btn.AutoButtonColor = false
+            btn.Parent = s5.content
+            wmCorner(btn, 6)
+            wmStroke(btn, Theme.primary, 1, 0.5)
+            local pad2 = Instance.new("UIPadding")
+            pad2.PaddingLeft = UDim.new(0, 12)
+            pad2.Parent = btn
+            presetBtns2[name] = btn
+            btn.MouseButton1Click:Connect(function()
+                if activeShaderPreset == name then
+                    removeShader()
+                else
+                    applyShaderPreset(name)
+                end
+                refreshPresets2()
+            end)
+        end
+    end
     -- Раскрытие/сворачивание секций с slide-анимацией
     local expandedSection = nil
     local function toggle(sec)
@@ -6824,6 +6930,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     end
     s1.header.MouseButton1Click:Connect(function() toggle(s1) end)
     s2.header.MouseButton1Click:Connect(function() toggle(s2) end)
+    s5.header.MouseButton1Click:Connect(function() toggle(s5) end)
 
     -- Footer
     local hint = Instance.new("TextLabel")
