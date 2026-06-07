@@ -10,108 +10,6 @@ local HttpService, CoreGui, ContextActionService = gs(game, "HttpService"), gs(g
 
 local player = Players.LocalPlayer
 
-
--- R15 CHECK: blocks script and shows notice on R15 servers
--- Runs on both manual start and autoexec
-do
-    -- Wait for game to fully load (critical for autoexec)
-    if not game:IsLoaded() then
-        game.Loaded:Wait()
-    end
-    task.wait(0.3)
-
-    -- Wait for local character via Heartbeat
-    local _rdy = false
-    local _rc = RunService.Heartbeat:Connect(function()
-        if player.Character and player.Character:FindFirstChildOfClass("Humanoid") then _rdy = true end
-    end)
-    local _t0 = tick()
-    repeat task.wait(0.05) until _rdy or (tick()-_t0 > 30)
-    _rc:Disconnect()
-
-    local function _isR15(char)
-        if not char then return false end
-        local h = char:FindFirstChildOfClass("Humanoid")
-        if h and tostring(h.RigType):find("R15") then return true end
-        return char:FindFirstChild("UpperTorso") ~= nil or char:FindFirstChild("LowerTorso") ~= nil
-    end
-
-    local _r15 = _isR15(player.Character)
-    if not _r15 then
-        for _, _p in ipairs(Players:GetPlayers()) do
-            if _isR15(_p.Character) then _r15=true; break end
-        end
-    end
-
-    if _r15 then
-        pcall(function()
-            local _g = Instance.new("ScreenGui")
-            _g.Name="SC_R15Notice"; _g.ResetOnSpawn=false; _g.DisplayOrder=999
-            _g.ZIndexBehavior=Enum.ZIndexBehavior.Sibling
-            local _f=Instance.new("Frame",_g)
-            _f.Size=UDim2.new(0,320,0,92); _f.Position=UDim2.new(1,20,1,-110)
-            _f.AnchorPoint=Vector2.new(0,1); _f.BackgroundColor3=Color3.fromRGB(28,28,28)
-            _f.BorderSizePixel=0
-            Instance.new("UICorner",_f).CornerRadius=UDim.new(0,8)
-            local _sk=Instance.new("UIStroke",_f)
-            _sk.Color=Color3.fromRGB(255,255,255);_sk.Thickness=1;_sk.Transparency=0.8
-            local _ac=Instance.new("Frame",_f)
-            _ac.Size=UDim2.new(0,4,1,-16);_ac.Position=UDim2.new(0,8,0,8)
-            _ac.BackgroundColor3=Color3.fromRGB(230,60,60);_ac.BorderSizePixel=0
-            Instance.new("UICorner",_ac).CornerRadius=UDim.new(1,0)
-            local _tl=Instance.new("TextLabel",_f)
-            _tl.Size=UDim2.new(1,-50,0,22);_tl.Position=UDim2.new(0,20,0,10)
-            _tl.BackgroundTransparency=1;_tl.Text="Skin Changer"
-            _tl.TextColor3=Color3.fromRGB(255,255,255)
-            _tl.Font=Enum.Font.GothamBold;_tl.TextSize=15
-            _tl.TextXAlignment=Enum.TextXAlignment.Left
-            local _md=Instance.new("TextLabel",_f)
-            _md.Size=UDim2.new(1,-28,0,46);_md.Position=UDim2.new(0,20,0,36)
-            _md.BackgroundTransparency=1
-            _md.Text="R15 rigs are not supported.\nThis script only works on R6 servers."
-            _md.TextColor3=Color3.fromRGB(175,175,175)
-            _md.Font=Enum.Font.Gotham;_md.TextSize=13
-            _md.TextXAlignment=Enum.TextXAlignment.Left;_md.TextWrapped=true
-            local _x=Instance.new("TextButton",_f)
-            _x.Size=UDim2.new(0,26,0,26);_x.Position=UDim2.new(1,-32,0,5)
-            _x.BackgroundTransparency=1;_x.Text="X"
-            _x.TextColor3=Color3.fromRGB(155,155,155)
-            _x.Font=Enum.Font.GothamBold;_x.TextSize=14
-            _g.Parent=player:WaitForChild("PlayerGui",10)
-            TweenService:Create(_f,TweenInfo.new(0.4,Enum.EasingStyle.Back,Enum.EasingDirection.Out),
-                {Position=UDim2.new(1,-332,1,-110)}):Play()
-            local function _cl()
-                TweenService:Create(_f,TweenInfo.new(0.25,Enum.EasingStyle.Quad,Enum.EasingDirection.In),
-                    {Position=UDim2.new(1,20,1,-110)}):Play()
-                task.delay(0.3,function() pcall(function() _g:Destroy() end) end)
-            end
-            _x.MouseButton1Click:Connect(_cl)
-            task.delay(10,_cl)
-        end)
-        -- Re-queue for next server so autoexec works on R6 after R15
-        pcall(function()
-            local _qFn = (type(queue_on_teleport)=="function" and queue_on_teleport)
-                      or (syn and type(syn.queue_on_teleport)=="function" and syn.queue_on_teleport)
-                      or (type(queueonteleport)=="function" and queueonteleport)
-            if not _qFn then return end
-            local _ap = "SkinChanger/SkinChanger_Autoexec"
-            local _mp = "SkinChanger/SkinChanger_Main.lua"
-            local parts = {
-                "local ok,raw=pcall(function() return readfile and isfile ",
-                "and isfile(\"" .. _ap .. "\") and readfile(\"" .. _ap .. "\") end) ",
-                "if not ok or not raw or raw==\"\" then return end ",
-                "local ok2,d=pcall(function() return game:GetService(\"HttpService\"):JSONDecode(raw) end) ",
-                "if not ok2 or type(d)~=\"table\" or d.enabled~=true then return end ",
-                "local sc pcall(function() if readfile and isfile and isfile(\"" .. _mp .. "\") ",
-                "then sc=readfile(\"" .. _mp .. "\") end end) ",
-                "if sc and sc~=\"\" then local ok3,fn=pcall(loadstring,sc) if ok3 and fn then task.spawn(fn) end end"
-            }
-            pcall(_qFn, table.concat(parts))
-        end)
-        return
-    end
-end
-
 -- Singleton guard: prevents duplicated menus/connections when autoexec and queue_on_teleport
 -- both run the same script, or when old autoexec files were left in several folders.
 pcall(function()
@@ -2359,26 +2257,14 @@ function captureSkinSnapshot(targetPlayer)
 
     local tHead = targetChar:FindFirstChild("Head")
     if tHead then
-        local faceTex = ""
-        local _fd = tHead:FindFirstChild("face")
-        if _fd and _fd.Texture ~= "" then
-            faceTex = _fd.Texture
-        else
-            pcall(function()
-                local hum = targetChar:FindFirstChildOfClass("Humanoid")
-                if hum then
-                    local desc = hum:GetAppliedDescription()
-                    if desc and desc.Face and desc.Face > 0 then
-                        faceTex = "rbxassetid://" .. tostring(desc.Face)
-                    end
-                end
-            end)
-        end
-        if faceTex ~= "" then skinData.face = faceTex end
+        local f = tHead:FindFirstChild("face")
+        if f then skinData.face = f.Texture end
         local m = tHead:FindFirstChildOfClass("SpecialMesh")
         if m then
             local clone = m:Clone()
-            if clone then skinData.headMesh = clone end
+            if clone then
+                skinData.headMesh = clone
+            end
         end
     end
 
@@ -3275,17 +3161,15 @@ function buildSkinModel(skinData)
     -- и при изменении Size части «отрываются» друг от друга.
 
     -- Head mesh (replace default SpecialMesh)
-    -- Head mesh: only apply standard MeshType.Head (skips Rthro/R15/FileMesh heads)
-    -- Reason: custom head meshes change visual head size but attachment points stay fixed,
-    -- causing accessories to appear oversized relative to the smaller head.
     if skinData.headMesh and parts.Head then
+        local oldMesh = parts.Head:FindFirstChildOfClass("SpecialMesh")
+        if oldMesh then oldMesh:Destroy() end
         local hm = skinData.headMesh
-        if typeof(hm) == "Instance" and hm:IsA("SpecialMesh")
-            and hm.MeshType == Enum.MeshType.Head then
-            local oldMesh = parts.Head:FindFirstChildOfClass("SpecialMesh")
-            if oldMesh then oldMesh:Destroy() end
+        if typeof(hm) == "Instance" then
             local clone = hm:Clone()
-            if clone then clone.Parent = parts.Head end
+            if clone then
+                clone.Parent = parts.Head
+            end
         end
     end
 
