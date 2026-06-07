@@ -9,6 +9,23 @@ local Players, TweenService, RunService, UserInputService = gs(game, "Players"),
 local HttpService, CoreGui, ContextActionService = gs(game, "HttpService"), gs(game, "CoreGui"), gs(game, "ContextActionService")
 
 local player = Players.LocalPlayer
+
+-- Singleton guard: prevents duplicated menus/connections when autoexec and queue_on_teleport
+-- both run the same script, or when old autoexec files were left in several folders.
+pcall(function()
+    local key = "__SkinChangerPremiumSingleton"
+    local old = rawget(getgenv and getgenv() or _G, key)
+    if old and type(old) == "table" then
+        old.disabled = true
+        if old.gui and old.gui.Parent then pcall(function() old.gui:Destroy() end) end
+        if old.headGui and old.headGui.Parent then pcall(function() old.headGui:Destroy() end) end
+        if old.worldFolder and old.worldFolder.Parent then pcall(function() old.worldFolder:Destroy() end) end
+        if old.connections then
+            for _, c in ipairs(old.connections) do pcall(function() c:Disconnect() end) end
+        end
+    end
+    rawset(getgenv and getgenv() or _G, key, { disabled = false, connections = {} })
+end)
 local character, humanoid, head
 pcall(function()
     character = player.Character or player.CharacterAdded:Wait()
@@ -739,7 +756,10 @@ end
 
 -- Queue loadstring on teleport (works for in-session teleports across ALL executors)
 -- Guarded: checks autoexec flag before loading, so disabling autoexec takes effect on next teleport.
+local queueOnTeleportConfigured = false
 function setupQueueOnTeleport()
+    if queueOnTeleportConfigured then return true end
+    queueOnTeleportConfigured = true
     -- Detect executor and use appropriate path
     local autoexecPath = "SkinChanger/SkinChanger_Autoexec"
     local cachePath = "SkinChanger/SkinChanger_Main.lua"
@@ -774,7 +794,13 @@ local function tryLoad()
     if sc and sc ~= "" then
         local Players = game:GetService("Players")
         local plr = Players.LocalPlayer
+        local execStarted = false
         local function exec()
+            if execStarted then return end
+            execStarted = true
+            local env = getgenv and getgenv() or _G
+            if env.__SkinChangerPremiumTeleportExecStarted then return end
+            env.__SkinChangerPremiumTeleportExecStarted = true
             local ok2, err2 = pcall(loadstring, sc)
             if ok2 and err2 then err2() end
         end
@@ -811,6 +837,11 @@ function createAutoInjectScriptContent()
 
     return [[-- SkinChanger Premium AutoInject
 -- Auto-generated. Loads from local cache or GitHub, with character-ready guard.
+
+local guardKey = "__SkinChangerPremiumAutoInjectRunning"
+local env = getgenv and getgenv() or _G
+if env[guardKey] then return end
+env[guardKey] = true
 
 local function tryLoad()
     local sc = nil
@@ -1697,13 +1728,20 @@ function applySkin(targetPlayer)
     -- Capture a frozen clone for HeadIcon before any delayed viewport update.
     -- This fixes live player skins showing only a plain head without hair/accessories.
     pcall(function()
+        local oldArchivable = targetChar.Archivable
+        targetChar.Archivable = true
         local clone = targetChar:Clone()
+        targetChar.Archivable = oldArchivable
         if clone then
             lastAppliedSkinClone = clone
             savedSkinData.characterClone = clone
         end
     end)
-    if setHeadIconAvatar then setHeadIconAvatar(targetPlayer.UserId) end
+    if setHeadIconAvatar then
+        setHeadIconAvatar(targetPlayer.UserId)
+        task.delay(1.5, updateHeadIconViewport)
+        task.delay(3, updateHeadIconViewport)
+    end
 
     for _, item in ipairs(targetChar:GetChildren()) do
         if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
@@ -2219,6 +2257,10 @@ screenGui.IgnoreGuiInset = true
 screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 screenGui.DisplayOrder = 999
 screenGui.Parent = _ghp
+pcall(function()
+    local state = rawget(getgenv and getgenv() or _G, "__SkinChangerPremiumSingleton")
+    if state then state.gui = screenGui end
+end)
 
 ----------------------------------------------------------------
 -- BACKDROP
@@ -4587,6 +4629,10 @@ end
 if player.Character then g_onCharacterAdded() end
 -- Сохраняем коннекшены для отключения при закрытии скрипта
 local scriptConnections = {}
+pcall(function()
+    local state = rawget(getgenv and getgenv() or _G, "__SkinChangerPremiumSingleton")
+    if state then state.connections = scriptConnections end
+end)
 scriptConnections.charAdded1 = player.CharacterAdded:Connect(g_onCharacterAdded)
 
 ----------------------------------------------------------------
@@ -4716,6 +4762,10 @@ headIconGui.IgnoreGuiInset = true
 headIconGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 headIconGui.DisplayOrder = 998
 headIconGui.Parent = (guiHostOk and guiHost) or CoreGui
+pcall(function()
+    local state = rawget(getgenv and getgenv() or _G, "__SkinChangerPremiumSingleton")
+    if state then state.headGui = headIconGui end
+end)
 
 local headIcon = Instance.new("Frame")
 headIcon.Name = "HeadIcon"
@@ -5892,6 +5942,10 @@ function ensureWorldMenuFolder()
     worldMenuFolder = Instance.new("Folder")
     worldMenuFolder.Name = "SkinChangerWorldMenus"
     worldMenuFolder.Parent = workspace
+    pcall(function()
+        local state = rawget(getgenv and getgenv() or _G, "__SkinChangerPremiumSingleton")
+        if state then state.worldFolder = worldMenuFolder end
+    end)
 end
 
 -- ============= СТИЛЬ-ХЕЛПЕРЫ ДЛЯ SURFACE GUI =============
