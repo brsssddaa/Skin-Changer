@@ -130,6 +130,10 @@ local guiHostOk, guiHost = pcall(function() return gethui and gethui() or CoreGu
 -- Consolidated locals (single declarations where possible)
 local originalPlayerCharacter, lastAppliedPlayer, savedSkinData = nil, nil, nil
 local savedSkins = {}
+-- More Skins toggle: when enabled, saving a skin from a player you already saved
+-- appends a new entry instead of overwriting the existing one. Persisted in
+-- SkinChanger_Settings as "moreSkins" = "Enable" | "Disable".
+moreSkinsEnabled = false
 local lastAppliedSkinUserId = nil  -- ID скина для HeadIcon после респавна
 local lastAppliedSkinClone = nil   -- frozen character clone from saved skin for HeadIcon
 
@@ -2711,6 +2715,7 @@ end
 
 local playersBtn   = makeNavButton("PLAYERS",   "players",   1)
 local savedBtn     = makeNavButton("SAVED",     "saved",     2)
+local settingsBtn  = makeNavButton("SETTINGS",  "settings",  3)
 
 ----------------------------------------------------------------
 -- CLOSE BUTTON (luxury X)
@@ -3343,7 +3348,7 @@ mcToggle.Position = UDim2.new(1, -16, 0.5, 0)
 mcToggle.Size = UDim2.fromOffset(110, 36)
 mcToggle.BackgroundColor3 = C.BG_PANEL2
 mcToggle.Text = "OPEN"
-mcToggle.TextColor3 = Theme.primary
+mcToggle.TextColor3 = C.TEXT_DIM
 mcToggle.TextSize = 11
 mcToggle.Font = FONT_BOLD
 mcToggle.AutoButtonColor = false
@@ -3351,9 +3356,110 @@ mcToggle.BorderSizePixel = 0
 mcToggle.ZIndex = 3
 mcToggle.Parent = menuColorRow
 corner(mcToggle, 8)
-local mcToggleStroke = stroke(mcToggle, Theme.primary, 1.5, 0.1)
-themeText(mcToggle, "primary")
-themeStrokeC(mcToggleStroke, "primary")
+local mcToggleStroke = stroke(mcToggle, C.TEXT_MUTE, 1, 0.6)
+
+-- More Skins row
+local moreSkinsRow = Instance.new("Frame")
+moreSkinsRow.Size = UDim2.new(1, -20, 0, 70)
+moreSkinsRow.Position = UDim2.new(0, 10, 0, 90)
+moreSkinsRow.BackgroundColor3 = C.BG_CARD
+moreSkinsRow.BackgroundTransparency = 0.05
+moreSkinsRow.BorderSizePixel = 0
+moreSkinsRow.ZIndex = 2
+moreSkinsRow.Parent = settingsPage
+corner(moreSkinsRow, 10)
+local msRowStroke = stroke(moreSkinsRow, Theme.dark, 1, 0.45)
+themeStrokeC(msRowStroke, "dark")
+
+local msAccent = Instance.new("Frame")
+msAccent.Size = UDim2.fromOffset(3, 30)
+msAccent.Position = UDim2.new(0, 14, 0.5, -15)
+msAccent.BackgroundColor3 = Theme.primary
+msAccent.BorderSizePixel = 0
+msAccent.ZIndex = 3
+msAccent.Parent = moreSkinsRow
+corner(msAccent, 2)
+themeBg(msAccent, "primary")
+
+local msTitle = Instance.new("TextLabel")
+msTitle.Position = UDim2.new(0, 28, 0, 14)
+msTitle.Size = UDim2.new(0, 240, 0, 18)
+msTitle.BackgroundTransparency = 1
+msTitle.Text = "MORE SKINS"
+msTitle.TextColor3 = C.TEXT
+msTitle.TextSize = 14
+msTitle.Font = FONT_BOLD
+msTitle.TextXAlignment = Enum.TextXAlignment.Left
+msTitle.ZIndex = 3
+msTitle.Parent = moreSkinsRow
+
+local msDesc = Instance.new("TextLabel")
+msDesc.Position = UDim2.new(0, 28, 0, 36)
+msDesc.Size = UDim2.new(0, 360, 0, 16)
+msDesc.BackgroundTransparency = 1
+msDesc.Text = "Save multiple different skins from the same player"
+msDesc.TextColor3 = C.TEXT_MUTE
+msDesc.TextSize = 11
+msDesc.Font = FONT_REG
+msDesc.TextXAlignment = Enum.TextXAlignment.Left
+msDesc.ZIndex = 3
+msDesc.Parent = moreSkinsRow
+
+local msToggle = Instance.new("TextButton")
+msToggle.AnchorPoint = Vector2.new(1, 0.5)
+msToggle.Position = UDim2.new(1, -16, 0.5, 0)
+msToggle.Size = UDim2.fromOffset(110, 36)
+msToggle.BackgroundColor3 = C.BG_PANEL2
+msToggle.Text = moreSkinsEnabled and "ENABLED" or "DISABLED"
+msToggle.TextColor3 = C.TEXT_DIM
+msToggle.TextSize = 11
+msToggle.Font = FONT_BOLD
+msToggle.AutoButtonColor = false
+msToggle.BorderSizePixel = 0
+msToggle.ZIndex = 3
+msToggle.Parent = moreSkinsRow
+corner(msToggle, 8)
+local msToggleStroke = stroke(msToggle, C.TEXT_MUTE, 1, 0.6)
+
+-- Tooltip on hover: describes when to enable this feature (English)
+local msTooltip = Instance.new("TextLabel")
+msTooltip.AnchorPoint = Vector2.new(1, 0)
+msTooltip.Position = UDim2.new(1, -16, 0, 4)
+msTooltip.Size = UDim2.fromOffset(300, 44)
+msTooltip.BackgroundColor3 = C.BG_DEEP
+msTooltip.BackgroundTransparency = 0.05
+msTooltip.BorderSizePixel = 0
+msTooltip.Text = "Enable this if you want to save more than one skin from the same player (e.g. your friend changes outfits and you want to keep both)."
+msTooltip.TextColor3 = C.TEXT
+msTooltip.TextSize = 11
+msTooltip.Font = FONT_REG
+msTooltip.TextWrapped = true
+msTooltip.TextXAlignment = Enum.TextXAlignment.Left
+msTooltip.TextYAlignment = Enum.TextYAlignment.Top
+msTooltip.Visible = false
+msTooltip.ZIndex = 50
+msTooltip.Parent = moreSkinsRow
+corner(msTooltip, 6)
+padd(msTooltip, 6, 6, 6, 6)
+local msTipStroke = stroke(msTooltip, Theme.primary, 1, 0.3)
+themeStrokeC(msTipStroke, "primary")
+
+msToggle.MouseEnter:Connect(function()
+    tween(msToggle, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
+    msTooltip.Visible = true
+end)
+msToggle.MouseLeave:Connect(function()
+    tween(msToggle, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
+    msTooltip.Visible = false
+end)
+
+msToggle.MouseButton1Click:Connect(function()
+    moreSkinsEnabled = not moreSkinsEnabled
+    msToggle.Text = moreSkinsEnabled and "ENABLED" or "DISABLED"
+    pcall(function()
+        scUpdateSetting("moreSkins", moreSkinsEnabled and "Enable" or "Disable")
+    end)
+end)
 
 local hintLabel = Instance.new("TextLabel")
 hintLabel.AnchorPoint = Vector2.new(0.5, 1)
@@ -3483,10 +3589,10 @@ function togglePalette(force)
 end
 
 mcToggle.MouseEnter:Connect(function()
-    tween(mcToggle, 0.15, {BackgroundColor3 = Theme.primary, TextColor3 = C.BLACK})
+    tween(mcToggle, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
 end)
 mcToggle.MouseLeave:Connect(function()
-    tween(mcToggle, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = Theme.primary})
+    tween(mcToggle, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
 end)
 mcToggle.MouseButton1Click:Connect(function() togglePalette() end)
 
@@ -3924,13 +4030,17 @@ function createPlayerCard(targetPlayer, layoutOrder)
 
     -- SAVE-кнопка для чужих игроков (+ → ✓)
     if targetPlayer ~= player then
-        local alreadySaved = findSavedIndexByName(targetPlayer.Name) ~= nil
+        -- With More Skins on, we always allow adding another snapshot for the same player,
+        -- so the star starts as "unsaved" regardless of existing entries.
+        local alreadySaved = (not moreSkinsEnabled) and (findSavedIndexByName(targetPlayer.Name) ~= nil)
         local saveBtn, setSavedState = makeSaveStarButton(card, alreadySaved)
 
         saveBtn.MouseButton1Click:Connect(function()
-            local existing = findSavedIndexByName(targetPlayer.Name)
-            if existing then
-                table.remove(savedSkins, existing)
+            if not moreSkinsEnabled then
+                local existing = findSavedIndexByName(targetPlayer.Name)
+                if existing then
+                    table.remove(savedSkins, existing)
+                end
             end
             local snapshot = captureSkinSnapshot(targetPlayer)
             if snapshot then
@@ -4339,6 +4449,7 @@ end
 
 playersBtn.MouseButton1Click  :Connect(function() switchPage("players")   end)
 savedBtn.MouseButton1Click    :Connect(function() switchPage("saved")     end)
+settingsBtn.MouseButton1Click :Connect(function() switchPage("settings")  end)
 
 for p, b in pairs(navButtons) do
     b.MouseEnter:Connect(function()
@@ -5285,6 +5396,514 @@ do
 end
 
 ----------------------------------------------------------------
+-- INVISIBLE MODULE (embedded from Invisible.lua)
+-- Toggle via button in Special Features menu OR via user-defined bind key
+-- (bind is stored in SkinChanger_Settings.invisibleBinds keyed by executor)
+----------------------------------------------------------------
+local INV_WALK_SPEED   = 32
+local INV_SPRINT_MULT  = 1.8
+local INV_JUMP_FORCE   = 50
+local INV_GRAVITY      = 196.2
+local INV_FLOOR_Y      = -500
+local INV_ACCEL        = 12
+local INV_DECEL        = 8
+local INV_TURN_SPEED   = 12
+
+local inv_isActive     = false
+local inv_driveSeat    = nil
+local inv_savedCF      = nil
+local inv_seatToGround = 0
+local inv_velY         = 0
+local inv_currentVelX  = 0
+local inv_currentVelZ  = 0
+local inv_conns        = {}
+local inv_savedSitAnims = {}
+local inv_walkTrack, inv_jumpTrack, inv_fallTrack = nil, nil, nil
+local inv_wasMoving, inv_wasGrounded = false, true
+
+-- Bind storage keyed by current executor. Empty by default (no key bound).
+local DEFAULT_INV_BIND = ""
+function invGetExecutorKey()
+    local name = nil
+    pcall(function() name = detectCurrentExecutor() end)
+    if not name or name == "" then name = "unknown" end
+    return tostring(name)
+end
+
+function invGetBind()
+    local s = scReadSettings()
+    local binds = s.invisibleBinds
+    if type(binds) ~= "table" then return DEFAULT_INV_BIND end
+    local k = invGetExecutorKey()
+    local v = binds[k]
+    if v == nil then return DEFAULT_INV_BIND end
+    return tostring(v)
+end
+
+function invBindLabel()
+    local b = invGetBind()
+    if b == "" then return "Bind: None" end
+    return "Bind: " .. b
+end
+
+function invSetBind(keyName)
+    local s = scReadSettings()
+    if type(s.invisibleBinds) ~= "table" then s.invisibleBinds = {} end
+    s.invisibleBinds[invGetExecutorKey()] = tostring(keyName)
+    scWriteSettings(s)
+end
+
+function invGetAnimIdFromScript(animate, folderName, fallbackId)
+    if not animate then return fallbackId end
+    local folder = animate:FindFirstChild(folderName)
+    if folder then
+        for _, obj in ipairs(folder:GetChildren()) do
+            if obj:IsA("Animation") and obj.AnimationId ~= "" then
+                return obj.AnimationId
+            end
+        end
+    end
+    return fallbackId
+end
+
+function invCleanup()
+    for i = #inv_conns, 1, -1 do
+        pcall(function() inv_conns[i]:Disconnect() end)
+        inv_conns[i] = nil
+    end
+    pcall(function() ContextActionService:UnbindAction("InvBlockJump") end)
+
+    pcall(function() if inv_walkTrack then inv_walkTrack:Stop(0); inv_walkTrack:Destroy() end end)
+    pcall(function() if inv_jumpTrack then inv_jumpTrack:Stop(0); inv_jumpTrack:Destroy() end end)
+    pcall(function() if inv_fallTrack then inv_fallTrack:Stop(0); inv_fallTrack:Destroy() end end)
+    inv_walkTrack, inv_jumpTrack, inv_fallTrack = nil, nil, nil
+
+    for animObj, origId in pairs(inv_savedSitAnims) do
+        pcall(function() animObj.AnimationId = origId end)
+    end
+    inv_savedSitAnims = {}
+
+    local char = player.Character
+    local hum  = char and char:FindFirstChildOfClass("Humanoid")
+    local hrp  = char and char:FindFirstChild("HumanoidRootPart")
+
+    local s = inv_driveSeat
+    inv_driveSeat = nil
+    if s and s.Parent then
+        local w = s:FindFirstChild("SeatWeld")
+        if w then pcall(function() w:Destroy() end) end
+        pcall(function() s:Destroy() end)
+    end
+
+    if char then
+        -- STEP 1: Kill Animate first so it doesn't fight the state transitions
+        -- (Animate re-evaluates on every hum.Changed and will replay sit if Seated).
+        local animate = char:FindFirstChild("Animate")
+        if animate and animate:IsA("LocalScript") then
+            animate.Disabled = true
+        end
+
+        if hum then
+            -- STEP 2: Stop every currently playing track on the animator.
+            -- This kills the replicated sit-pose on OTHER clients immediately
+            -- (Animator tracks replicate to all clients, so stopping them here
+            -- stops what other players actually see).
+            local animator = hum:FindFirstChildOfClass("Animator")
+            if animator then
+                for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
+                    pcall(function() tr:Stop(0) end)
+                end
+            end
+
+            -- STEP 3: Hard-reset humanoid via PlatformStand toggle.
+            -- Setting PlatformStand=true forcibly detaches the humanoid from any
+            -- seat/weld and REPLICATES a physics-state change. Setting it back
+            -- to false restarts normal humanoid physics. This is the classic
+            -- fix for "stuck sitting" ghost poses on other clients.
+            pcall(function() hum.PlatformStand = true end)
+            pcall(function() hum.Sit = false end)
+
+            workspace.CurrentCamera.CameraSubject = hum
+        end
+
+        -- STEP 4: Physically lift HRP off any residual seat surface + zero
+        -- velocity. Small upward push makes sure we're not resting on a chair.
+        if hrp then
+            pcall(function()
+                hrp.CFrame = hrp.CFrame + Vector3.new(0, 2, 0)
+                hrp.AssemblyLinearVelocity  = Vector3.new(0, 0, 0)
+                hrp.AssemblyAngularVelocity = Vector3.zero
+            end)
+        end
+
+        -- STEP 5: Drop PlatformStand, force a REAL jump (hum.Jump = true).
+        -- Jump=true triggers the server's jump handler which naturally exits
+        -- the Seated state and replicates Jumping→Freefall→Landed→Running
+        -- to every other client. This is what actually clears the sit pose.
+        task.delay(0.08, function()
+            if not hum or not hum.Parent then return end
+            pcall(function() hum.PlatformStand = false end)
+            pcall(function() hum.Sit = false end)
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
+            pcall(function() hum.Jump = true end)
+            local ch = hum.Parent
+            local ch_hrp = ch and ch:FindFirstChild("HumanoidRootPart")
+            if ch_hrp then
+                pcall(function()
+                    ch_hrp.AssemblyLinearVelocity = Vector3.new(0, 55, 0)
+                end)
+            end
+        end)
+
+        -- STEP 6: Nudge through GettingUp so Animate (once re-enabled) reads
+        -- a non-Seated state and does NOT play sit again.
+        task.delay(0.22, function()
+            if not hum or not hum.Parent then return end
+            pcall(function() hum.Sit = false end)
+            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        end)
+
+        -- STEP 7: Land in Running state and re-enable Animate LAST so it never
+        -- ticks while Sit could still be true.
+        task.delay(0.45, function()
+            if hum and hum.Parent then
+                pcall(function() hum.Sit = false end)
+                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+            end
+            local ch = player.Character
+            local a = ch and ch:FindFirstChild("Animate")
+            if a and a:IsA("LocalScript") then
+                a.Disabled = false
+            end
+        end)
+
+        -- STEP 8: Return to original position after everything settles.
+        if hrp and inv_savedCF then
+            task.delay(0.6, function()
+                if hrp and hrp.Parent then
+                    hrp.CFrame = inv_savedCF + CFrame.new(0, 1, 0)
+                    pcall(function()
+                        hrp.AssemblyLinearVelocity  = Vector3.zero
+                        hrp.AssemblyAngularVelocity = Vector3.zero
+                    end)
+                end
+                -- Final safety: one more Sit=false + Running poke.
+                if hum and hum.Parent then
+                    pcall(function() hum.Sit = false end)
+                    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
+                end
+            end)
+        end
+    end
+
+    inv_isActive = false
+    inv_velY, inv_currentVelX, inv_currentVelZ = 0, 0, 0
+    inv_savedCF = nil
+    inv_seatToGround = 0
+    inv_wasMoving = false
+    inv_wasGrounded = true
+
+    if invActionBtnRef then
+        pcall(function()
+            invActionBtnRef.Text = "Invisible v1"
+        end)
+    end
+end
+
+function invActivate()
+    if inv_isActive then return end
+    local char = player.Character
+    if not char then return end
+    local hrp = char:FindFirstChild("HumanoidRootPart")
+    local hum = char:FindFirstChildOfClass("Humanoid")
+    if not hrp or not hum then return end
+
+    inv_isActive = true
+    inv_savedCF = hrp.CFrame
+
+    local rayParams = RaycastParams.new()
+    rayParams.FilterType = Enum.RaycastFilterType.Exclude
+    rayParams.FilterDescendantsInstances = {char}
+
+    local initRay = workspace:Raycast(hrp.Position, Vector3.new(0, -20, 0), rayParams)
+    if initRay then
+        inv_seatToGround = (hrp.Position.Y - 1.5) - initRay.Position.Y
+    else
+        inv_seatToGround = 1.5
+    end
+
+    local seat = Instance.new("VehicleSeat")
+    seat.Name          = "InvSeat"
+    seat.Size          = Vector3.new(2, 0.4, 2)
+    seat.Anchored      = true
+    seat.CanCollide    = false
+    seat.Transparency  = 1
+    seat.HeadsUpDisplay = false
+    seat.MaxSpeed      = 0
+    seat.Torque        = 0
+    seat.CFrame = inv_savedCF * CFrame.new(0, -1.5, 0)
+    seat.Parent = workspace
+    inv_driveSeat = seat
+
+    rayParams.FilterDescendantsInstances = {seat, char}
+
+    hrp.CFrame = seat.CFrame * CFrame.new(0, 1.6, 0)
+    pcall(function() seat:Sit(hum) end)
+
+    task.defer(function()
+        if not inv_isActive then return end
+        if hum.SeatPart ~= seat then
+            local existing = seat:FindFirstChild("SeatWeld")
+            if existing then existing:Destroy() end
+            local w = Instance.new("Weld")
+            w.Name  = "SeatWeld"
+            w.Part0 = seat
+            w.Part1 = hrp
+            w.C0    = CFrame.new(0, 0, 0)
+            w.C1    = CFrame.new(0, -1.5, 0)
+            w.Parent = seat
+            hum.Sit = true
+        end
+    end)
+
+    task.delay(0.4, function()
+        if not inv_isActive then return end
+        local animate = char:FindFirstChild("Animate")
+        if animate then
+            local idleId = invGetAnimIdFromScript(animate, "idle", "rbxassetid://507766666")
+            local sitFolder = animate:FindFirstChild("sit")
+            if sitFolder then
+                for _, obj in ipairs(sitFolder:GetChildren()) do
+                    if obj:IsA("Animation") then
+                        inv_savedSitAnims[obj] = obj.AnimationId
+                        obj.AnimationId = idleId
+                    end
+                end
+            end
+            animate.Disabled = true
+            task.wait(0.1)
+            if not inv_isActive then return end
+            animate.Disabled = false
+        end
+
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+
+        local walkId = invGetAnimIdFromScript(animate, "walk", "rbxassetid://507777826")
+        local jumpId = invGetAnimIdFromScript(animate, "jump", "rbxassetid://507765000")
+        local fallId = invGetAnimIdFromScript(animate, "fall", "rbxassetid://507767968")
+
+        local function safeLoad(animId, looped)
+            local a = Instance.new("Animation"); a.AnimationId = animId
+            local ok, track = pcall(function() return animator:LoadAnimation(a) end)
+            if ok and track then
+                track.Looped = looped
+                track.Priority = Enum.AnimationPriority.Action4
+                return track
+            end
+            return nil
+        end
+
+        inv_walkTrack = safeLoad(walkId, true)
+        inv_jumpTrack = safeLoad(jumpId, false)
+        inv_fallTrack = safeLoad(fallId, true)
+    end)
+
+    workspace.CurrentCamera.CameraSubject = hum
+
+    ContextActionService:BindAction("InvBlockJump", function(_, state)
+        if state == Enum.UserInputState.Begin and inv_isActive then
+            return Enum.ContextActionResult.Sink
+        end
+        return Enum.ContextActionResult.Pass
+    end, false, Enum.KeyCode.Space)
+
+    inv_velY, inv_currentVelX, inv_currentVelZ = 0, 0, 0
+    inv_wasMoving = false
+    inv_wasGrounded = true
+    local currentYaw = math.atan2(-inv_savedCF.LookVector.X, -inv_savedCF.LookVector.Z)
+
+    inv_conns[#inv_conns + 1] = RunService.RenderStepped:Connect(function(dt)
+        if not inv_driveSeat or not inv_driveSeat.Parent then return end
+
+        workspace.CurrentCamera.CameraSubject = hum
+        workspace.CurrentCamera.CameraType = Enum.CameraType.Custom
+
+        local cam   = workspace.CurrentCamera
+        local look  = cam.CFrame.LookVector
+        local right = cam.CFrame.RightVector
+
+        local inputDir = Vector3.new(0, 0, 0)
+        if UserInputService:IsKeyDown(Enum.KeyCode.W) then inputDir = inputDir + look  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.S) then inputDir = inputDir - look  end
+        if UserInputService:IsKeyDown(Enum.KeyCode.A) then inputDir = inputDir - right end
+        if UserInputService:IsKeyDown(Enum.KeyCode.D) then inputDir = inputDir + right end
+        inputDir = Vector3.new(inputDir.X, 0, inputDir.Z)
+
+        local wantsToMove = inputDir.Magnitude > 0.01
+        if wantsToMove then inputDir = inputDir.Unit end
+
+        local speed = INV_WALK_SPEED
+        if UserInputService:IsKeyDown(Enum.KeyCode.LeftShift) then
+            speed = speed * INV_SPRINT_MULT
+        end
+
+        local targetVelX = wantsToMove and inputDir.X * speed or 0
+        local targetVelZ = wantsToMove and inputDir.Z * speed or 0
+
+        local lerpFactor = math.clamp((wantsToMove and INV_ACCEL or INV_DECEL) * dt, 0, 1)
+        inv_currentVelX = inv_currentVelX + (targetVelX - inv_currentVelX) * lerpFactor
+        inv_currentVelZ = inv_currentVelZ + (targetVelZ - inv_currentVelZ) * lerpFactor
+
+        local horizSpeed = math.sqrt(inv_currentVelX * inv_currentVelX + inv_currentVelZ * inv_currentVelZ)
+        if horizSpeed < 0.05 and not wantsToMove then
+            inv_currentVelX, inv_currentVelZ, horizSpeed = 0, 0, 0
+        end
+        local isMoving = horizSpeed > 0.5
+
+        local seatCF  = inv_driveSeat.CFrame
+        local seatPos = seatCF.Position
+
+        local probeOrigin = seatPos + Vector3.new(0, 3, 0)
+        local rayResult = workspace:Raycast(probeOrigin, Vector3.new(0, -8, 0), rayParams)
+        local grounded = (rayResult ~= nil)
+
+        if grounded then
+            inv_velY = math.max(inv_velY, 0)
+            local targetSeatY = rayResult.Position.Y + inv_seatToGround
+            local groundLerp = math.clamp(15 * dt, 0, 1)
+            seatPos = Vector3.new(seatPos.X, seatPos.Y + (targetSeatY - seatPos.Y) * groundLerp, seatPos.Z)
+        else
+            inv_velY = inv_velY - INV_GRAVITY * dt
+        end
+
+        if grounded and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+            inv_velY = INV_JUMP_FORCE
+        end
+
+        local newY = seatPos.Y + inv_velY * dt
+        if newY < INV_FLOOR_Y then newY = INV_FLOOR_Y; inv_velY = 0 end
+
+        local shiftLocked = (UserInputService.MouseBehavior == Enum.MouseBehavior.LockCenter)
+        if shiftLocked then
+            local camLook = cam.CFrame.LookVector
+            currentYaw = math.atan2(-camLook.X, -camLook.Z)
+        elseif isMoving then
+            local targetYaw = math.atan2(-inv_currentVelX, -inv_currentVelZ)
+            local diff = targetYaw - currentYaw
+            while diff >  math.pi do diff = diff - 2 * math.pi end
+            while diff < -math.pi do diff = diff + 2 * math.pi end
+            currentYaw = currentYaw + diff * math.clamp(INV_TURN_SPEED * dt, 0, 1)
+        end
+
+        local newPos = Vector3.new(seatPos.X + inv_currentVelX * dt, newY, seatPos.Z + inv_currentVelZ * dt)
+        inv_driveSeat.CFrame = CFrame.new(newPos)
+
+        local sw = inv_driveSeat:FindFirstChild("SeatWeld")
+        if sw then
+            sw.C0 = CFrame.Angles(0, currentYaw, 0)
+        end
+
+        if grounded then
+            if isMoving then
+                if not inv_wasMoving or not inv_wasGrounded then
+                    pcall(function() if inv_fallTrack and inv_fallTrack.IsPlaying then inv_fallTrack:Stop(0.15) end end)
+                    pcall(function() if inv_jumpTrack and inv_jumpTrack.IsPlaying then inv_jumpTrack:Stop(0.1) end end)
+                    pcall(function() if inv_walkTrack and not inv_walkTrack.IsPlaying then inv_walkTrack:Play(0.2) end end)
+                end
+                pcall(function() if inv_walkTrack then inv_walkTrack:AdjustSpeed(speed / INV_WALK_SPEED) end end)
+            else
+                if inv_wasMoving then
+                    pcall(function() if inv_walkTrack and inv_walkTrack.IsPlaying then inv_walkTrack:Stop(0.25) end end)
+                end
+                if not inv_wasGrounded then
+                    pcall(function() if inv_fallTrack and inv_fallTrack.IsPlaying then inv_fallTrack:Stop(0.15) end end)
+                    pcall(function() if inv_jumpTrack and inv_jumpTrack.IsPlaying then inv_jumpTrack:Stop(0.1) end end)
+                end
+            end
+        else
+            if inv_wasGrounded then
+                pcall(function() if inv_walkTrack and inv_walkTrack.IsPlaying then inv_walkTrack:Stop(0.1) end end)
+                if inv_velY > 0 then
+                    pcall(function() if inv_jumpTrack then inv_jumpTrack:Play(0.1) end end)
+                else
+                    pcall(function() if inv_fallTrack then inv_fallTrack:Play(0.15) end end)
+                end
+            elseif inv_velY < -5 then
+                if inv_jumpTrack and inv_jumpTrack.IsPlaying then
+                    pcall(function() inv_jumpTrack:Stop(0.15) end)
+                    pcall(function() if inv_fallTrack and not inv_fallTrack.IsPlaying then inv_fallTrack:Play(0.15) end end)
+                end
+            end
+        end
+
+        inv_wasMoving   = isMoving
+        inv_wasGrounded = grounded
+    end)
+
+    inv_conns[#inv_conns + 1] = hum:GetPropertyChangedSignal("Sit"):Connect(function()
+        if not hum.Sit and inv_isActive then
+            task.defer(function()
+                if not inv_isActive then return end
+                if not inv_driveSeat or not inv_driveSeat.Parent then return end
+                local currentHRP = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+                if not currentHRP then return end
+                local existingW = inv_driveSeat:FindFirstChild("SeatWeld")
+                if not existingW then
+                    local w = Instance.new("Weld")
+                    w.Name = "SeatWeld"
+                    w.Part0 = inv_driveSeat
+                    w.Part1 = currentHRP
+                    w.C0 = CFrame.new(0, 0, 0)
+                    w.C1 = CFrame.new(0, -1.5, 0)
+                    w.Parent = inv_driveSeat
+                end
+                hum.Sit = true
+            end)
+        end
+    end)
+
+    inv_conns[#inv_conns + 1] = hum.Died:Connect(invCleanup)
+
+    if invActionBtnRef then
+        pcall(function()
+            invActionBtnRef.Text = "Return to Body"
+        end)
+    end
+end
+
+function invToggle()
+    if inv_isActive then invCleanup() else invActivate() end
+end
+
+-- Bind key listener (works whether menu is open or closed)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if scriptDisabled then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    if inv_awaitingBind then return end
+    local bindName = invGetBind()
+    if bindName == "" then return end
+    if input.KeyCode.Name == bindName then
+        invToggle()
+    end
+end)
+
+-- Respawn safety: clean up if character respawns while invisible
+pcall(function()
+    player.CharacterAdded:Connect(function()
+        task.wait(0.2)
+        if inv_isActive then invCleanup() end
+    end)
+end)
+
+invActionBtnRef = nil
+inv_awaitingBind = false
+
+----------------------------------------------------------------
 -- SPECIAL FEATURES MENU (password-protected)
 ----------------------------------------------------------------
 local specialMenuOpen = false
@@ -5834,57 +6453,72 @@ function createEmptySpecialMenu()
         local spawnTitle = Instance.new("TextLabel")
         spawnTitle.Size = UDim2.new(1, 0, 0, 24)
         spawnTitle.BackgroundTransparency = 1
-        spawnTitle.Text = "Spawn Model"
+        spawnTitle.Text = "Features"
         spawnTitle.TextColor3 = Theme.primary
         spawnTitle.Font = FONT_BOLD
         spawnTitle.TextSize = 14
         spawnTitle.TextXAlignment = Enum.TextXAlignment.Left
         spawnTitle.Parent = spawnSection
 
-        local dealerBtn = Instance.new("TextButton")
-        dealerBtn.Size = UDim2.new(1, 0, 0, 30)
-        dealerBtn.Position = UDim2.new(0, 0, 0, 30)
-        dealerBtn.BackgroundColor3 = C.BLACK
-        dealerBtn.BackgroundTransparency = 0.2
-        dealerBtn.Text = "Spawn Dealer"
-        dealerBtn.TextColor3 = C.WHITE
-        dealerBtn.Font = FONT_BOLD
-        dealerBtn.TextSize = 12
-        dealerBtn.AutoButtonColor = false
-        dealerBtn.Parent = spawnSection
-        wmCorner(dealerBtn, 6)
-        wmStroke(dealerBtn, Theme.primary, 1, 0.5)
-
-        dealerBtn.MouseButton1Click:Connect(function()
-            local model = spawnModelFromJSON("Dealer", "Dealer")
-            if model then
-                print("✅ Dealer model spawned successfully")
-            else
-                print("❌ Failed to spawn Dealer model")
-            end
+        -- Invisible v1 action button (toggles the ghost-walker)
+        local invBtn = Instance.new("TextButton")
+        invBtn.Size = UDim2.new(0.62, -4, 0, 30)
+        invBtn.Position = UDim2.new(0, 0, 0, 30)
+        invBtn.BackgroundColor3 = C.BLACK
+        invBtn.BackgroundTransparency = 0.2
+        invBtn.Text = inv_isActive and "Return to Body" or "Invisible v1"
+        invBtn.TextColor3 = C.WHITE
+        invBtn.Font = FONT_BOLD
+        invBtn.TextSize = 12
+        invBtn.AutoButtonColor = false
+        invBtn.Parent = spawnSection
+        wmCorner(invBtn, 6)
+        wmStroke(invBtn, Theme.primary, 1, 0.5)
+        if not isBackSide then
+            invActionBtnRef = invBtn
+        end
+        invBtn.MouseButton1Click:Connect(function()
+            invToggle()
+            invBtn.Text = inv_isActive and "Return to Body" or "Invisible v1"
         end)
 
-        local shotgunBtn = Instance.new("TextButton")
-        shotgunBtn.Size = UDim2.new(1, 0, 0, 30)
-        shotgunBtn.Position = UDim2.new(0, 0, 0, 65)
-        shotgunBtn.BackgroundColor3 = C.BLACK
-        shotgunBtn.BackgroundTransparency = 0.2
-        shotgunBtn.Text = "Spawn Shotgun"
-        shotgunBtn.TextColor3 = C.WHITE
-        shotgunBtn.Font = FONT_BOLD
-        shotgunBtn.TextSize = 12
-        shotgunBtn.AutoButtonColor = false
-        shotgunBtn.Parent = spawnSection
-        wmCorner(shotgunBtn, 6)
-        wmStroke(shotgunBtn, Theme.primary, 1, 0.5)
+        -- Bind button — click, then press a key to rebind
+        local bindBtn = Instance.new("TextButton")
+        bindBtn.Size = UDim2.new(0.38, -4, 0, 30)
+        bindBtn.Position = UDim2.new(0.62, 4, 0, 30)
+        bindBtn.BackgroundColor3 = C.BLACK
+        bindBtn.BackgroundTransparency = 0.2
+        bindBtn.Text = invBindLabel()
+        bindBtn.TextColor3 = C.WHITE
+        bindBtn.Font = FONT_BOLD
+        bindBtn.TextSize = 12
+        bindBtn.AutoButtonColor = false
+        bindBtn.Parent = spawnSection
+        wmCorner(bindBtn, 6)
+        wmStroke(bindBtn, Theme.primary, 1, 0.5)
 
-        shotgunBtn.MouseButton1Click:Connect(function()
-            local model = spawnModelFromJSON("Shotgun", "Shotgun")
-            if model then
-                print("✅ Shotgun model spawned successfully")
-            else
-                print("❌ Failed to spawn Shotgun model")
-            end
+        bindBtn.MouseButton1Click:Connect(function()
+            if inv_awaitingBind then return end
+            inv_awaitingBind = true
+            bindBtn.Text = "Press key..."
+            task.spawn(function()
+                local capture
+                capture = UserInputService.InputBegan:Connect(function(input, gp)
+                    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+                    if input.KeyCode == Enum.KeyCode.Unknown then return end
+                    if input.KeyCode == Enum.KeyCode.Escape then
+                        capture:Disconnect()
+                        inv_awaitingBind = false
+                        bindBtn.Text = invBindLabel()
+                        return
+                    end
+                    local name = input.KeyCode.Name
+                    invSetBind(name)
+                    capture:Disconnect()
+                    inv_awaitingBind = false
+                    bindBtn.Text = "Bind: " .. name
+                end)
+            end)
         end)
 
     end
@@ -7841,6 +8475,18 @@ pcall(updateHeadIconViewport)
 task.spawn(function()
     pcall(function()
         local settings = scReadSettings()
+        -- Restore More Skins toggle (Enable = on until user turns it off in the menu)
+        if settings.moreSkins == "Enable" then
+            moreSkinsEnabled = true
+            if msToggle then
+                pcall(function() msToggle.Text = "ENABLED" end)
+            end
+        else
+            moreSkinsEnabled = false
+            if msToggle then
+                pcall(function() msToggle.Text = "DISABLED" end)
+            end
+        end
         -- Restore theme
         if settings.themeName then
             for _, t in ipairs(THEMES) do
