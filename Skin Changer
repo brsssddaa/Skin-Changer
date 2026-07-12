@@ -24,6 +24,11 @@ pcall(function()
             for _, c in ipairs(old.connections) do pcall(function() c:Disconnect() end) end
         end
     end
+    -- Также сносим face-watcher от прошлого экземпляра — иначе он проживёт 5.5с и будет мешать новому.
+    if _G._SC_faceWatcherConn then
+        pcall(function() _G._SC_faceWatcherConn:Disconnect() end)
+        _G._SC_faceWatcherConn = nil
+    end
     rawset(getgenv and getgenv() or _G, key, { disabled = false, connections = {} })
 end)
 local character, humanoid, head
@@ -130,25 +135,60 @@ local guiHostOk, guiHost = pcall(function() return gethui and gethui() or CoreGu
 -- Consolidated locals (single declarations where possible)
 local originalPlayerCharacter, lastAppliedPlayer, savedSkinData = nil, nil, nil
 local savedSkins = {}
+-- Light Menu + Menu Keybind (loaded from Settings early so UI/InputBegan can use them)
+-- do-блок: __sc_settings_early не утекает в main chunk (200-регистровый лимит Luau)
+local lightMenu, menuKeybindName
+do
+    local s
+    pcall(function()
+        if isfile and isfile("SkinChanger/SkinChanger_Settings") and readfile then
+            s = HttpService:JSONDecode(readfile("SkinChanger/SkinChanger_Settings"))
+        end
+    end)
+    if type(s) ~= "table" then s = {} end
+    lightMenu = s.LightMenu == true
+    menuKeybindName = s.MenuKeybind or "Insert"
+    _G.__SC_hideIcon = s.HideIcon == true  -- через _G чтобы не занимать локал главного chunk
+end
 -- More Skins toggle: when enabled, saving a skin from a player you already saved
 -- appends a new entry instead of overwriting the existing one. Persisted in
 -- SkinChanger_Settings as "moreSkins" = "Enable" | "Disable".
-moreSkinsEnabled = false
+local moreSkinsEnabled = false
 local lastAppliedSkinUserId = nil  -- ID скина для HeadIcon после респавна
 local lastAppliedSkinClone = nil   -- frozen character clone from saved skin for HeadIcon
 
 -- Forward declarations (globals to reduce locals)
 updateSavedSkinsList, updatePlayersList, closeMenu, openMenu, toggleMenu = nil, nil, nil, nil, nil
 setHeadIconAvatar, showGlassesWorldMenus, hideGlassesWorldMenus = nil, nil, nil
-glassesHidden = false   -- true когда очки на лице, но панели спрятаны Hide-кнопкой
-scriptDisabled = false  -- true когда скрипт отключен через Close Script
+local glassesHidden = false   -- true когда очки на лице, но панели спрятаны Hide-кнопкой
+local scriptDisabled = false  -- true когда скрипт отключен через Close Script
 
 ----------------------------------------------------------------
 -- STORAGE: consolidated SkinChanger/ folder (JSON files)
 ----------------------------------------------------------------
-SC_DIR           = "SkinChanger"
-SC_SKINS_FILE    = SC_DIR .. "/SkinChanger_SavedSkins"
-SC_AUTOEXEC_FILE = SC_DIR .. "/SkinChanger_Autoexec"
+SC_DIR             = "SkinChanger"
+SC_SKINS_FILE      = SC_DIR .. "/SkinChanger_SavedSkins"       -- R6 (совместимость)
+SC_SKINS_FILE_R15  = SC_DIR .. "/SkinChanger_SavedSkins_R15"   -- R15
+SC_AUTOEXEC_FILE   = SC_DIR .. "/SkinChanger_Autoexec"
+
+-- Определяем rig-тип локального игрока для выбора файла скинов.
+-- Возвращает "R15" или "R6". В lobby до появления Character считаем R6 (fallback).
+function scDetectLocalRig()
+    local ok, rig = pcall(function()
+        local ch = player.Character
+        if not ch then return "R6" end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        if hum and hum.RigType == Enum.HumanoidRigType.R15 then return "R15" end
+        if ch:FindFirstChild("UpperTorso") then return "R15" end
+        return "R6"
+    end)
+    if ok and rig then return rig end
+    return "R6"
+end
+
+function scGetSkinsFilePath()
+    return (scDetectLocalRig() == "R15") and SC_SKINS_FILE_R15 or SC_SKINS_FILE
+end
 
 function ensureSkinChangerDir()
     if makefolder and isfolder then
@@ -173,14 +213,20 @@ end
 function scWriteJSON(path, tbl)
     if not writefile then return false end
     ensureSkinChangerDir()
+    local state = getgenv and getgenv() or _G
+    state.__SkinChangerWriteLocks = state.__SkinChangerWriteLocks or {}
+    while state.__SkinChangerWriteLocks[path] do task.wait() end
+    state.__SkinChangerWriteLocks[path] = true
     local ok = pcall(function()
         writefile(path, HttpService:JSONEncode(tbl or {}))
     end)
+    state.__SkinChangerWriteLocks[path] = nil
     return ok
 end
 
 function scReadSkinsBundle()
-    local data = scReadJSON(SC_SKINS_FILE)
+    -- Читаем rig-specific файл (R6 или R15). Legacy R6-файл читается для R6 серверов.
+    local data = scReadJSON(scGetSkinsFilePath())
     if type(data) ~= "table" then
         data = { savedSkins = {}, glassesState = "closed" }
     end
@@ -190,7 +236,7 @@ function scReadSkinsBundle()
 end
 
 function scWriteSkinsBundle(bundle)
-    return scWriteJSON(SC_SKINS_FILE, bundle)
+    return scWriteJSON(scGetSkinsFilePath(), bundle)
 end
 
 function scReadAutoexec()
@@ -322,6 +368,43 @@ function saveSavedSkinsToFile()
             }
         end
 
+        -- R15 HumanoidDescription — сериализуем поля в JSON.
+        -- Если сохранён — на load создаём HumanoidDescription и ApplyDescription (нативный API).
+        local r15DescFields = nil
+        if skinData.humanoidDescription and type(skinData.humanoidDescription) == "userdata" then
+            local desc = skinData.humanoidDescription
+            r15DescFields = {}
+            -- Скаляры (числа/строки/id)
+            local numFields = {"HeadScale","WidthScale","HeightScale","DepthScale","BodyTypeScale","ProportionScale",
+                "Head","Torso","LeftArm","RightArm","LeftLeg","RightLeg",
+                "LeftLowerArm","LeftUpperArm","LeftHand","RightLowerArm","RightUpperArm","RightHand",
+                "LeftLowerLeg","LeftUpperLeg","LeftFoot","RightLowerLeg","RightUpperLeg","RightFoot",
+                "UpperTorso","LowerTorso","Face","Shirt","Pants","GraphicTShirt"}
+            local strFields = {"HatAccessory","HairAccessory","FaceAccessory","NeckAccessory",
+                "ShoulderAccessory","FrontAccessory","BackAccessory","WaistAccessory"}
+            local colorFields = {"HeadColor","TorsoColor","LeftArmColor","RightArmColor","LeftLegColor","RightLegColor"}
+            for _, f in ipairs(numFields) do
+                pcall(function()
+                    local v = desc[f]
+                    if v ~= nil then r15DescFields[f] = v end
+                end)
+            end
+            for _, f in ipairs(strFields) do
+                pcall(function()
+                    local v = desc[f]
+                    if v ~= nil and v ~= "" then r15DescFields[f] = v end
+                end)
+            end
+            for _, f in ipairs(colorFields) do
+                pcall(function()
+                    local c = desc[f]
+                    if c then
+                        r15DescFields[f] = { __color = true, r = c.R, g = c.G, b = c.B }
+                    end
+                end)
+            end
+        end
+
         local entry = {
             playerName     = skinData.playerName,
             customLabel    = skinData.customLabel,
@@ -335,6 +418,7 @@ function saveSavedSkinsToFile()
             headMesh       = nil,
             characterMeshes= {},
             accessories    = {},
+            r15DescFields  = r15DescFields,  -- fast-path для R15 apply (нативный API)
         }
 
         if skinData.headMesh and type(skinData.headMesh) == "userdata" then
@@ -384,6 +468,20 @@ function saveSavedSkinsToFile()
                         meshId = mesh.MeshId; textureId = mesh.TextureId
                         meshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
                     end
+                    local isLayered = false
+                    pcall(function()
+                        if handle:FindFirstChildOfClass("WrapLayer") or handle:FindFirstChild("WrapTarget") then
+                            isLayered = true
+                        end
+                    end)
+                    -- Сохраняем HeadScale target'а для корректировки размеров при applying
+                    -- на игрока с другим HeadScale (иначе — гигантские очки/шапки).
+                    local targetHeadScale = 1.0
+                    pcall(function()
+                        if skinData.bodyScales and skinData.bodyScales.HeadScale then
+                            targetHeadScale = skinData.bodyScales.HeadScale
+                        end
+                    end)
                     local accDataConverted = {
                         Name               = accData.Name,
                         MeshId             = meshId,
@@ -395,6 +493,8 @@ function saveSavedSkinsToFile()
                         HandleTransparency = handle.Transparency,
                         HandleMaterial     = tostring(handle.Material),
                         IsMeshPart         = handle:IsA("MeshPart"),
+                        isLayered          = isLayered,
+                        TargetHeadScale    = targetHeadScale,
                     }
                     if att then
                         local x, y, z, r00, r01, r02, r10, r11, r12, r20, r21, r22 = att.CFrame:GetComponents()
@@ -429,6 +529,8 @@ function loadSavedSkinsFromFile()
         if type(dataLoaded) ~= "table" then return end
 
         for _, skinData in ipairs(dataLoaded) do
+          -- Per-skin pcall: битый один слот не должен ломать загрузку остальных 82.
+          local perOk, perErr = pcall(function()
             local bodyColorsRestored = nil
             if skinData.bodyColors then
                 bodyColorsRestored = {
@@ -455,6 +557,7 @@ function loadSavedSkinsFromFile()
                 characterMeshes = {},
                 accessories     = {},
                 characterClone  = nil,
+                r15DescFields   = skinData.r15DescFields,  -- R15 native-apply fast-path
             }
 
             if skinData.headMesh then
@@ -502,6 +605,10 @@ function loadSavedSkinsFromFile()
             end
 
             table.insert(savedSkins, newSkin)
+          end)
+          if not perOk then
+            warn("[SkinChanger] Skipped broken skin during load:", perErr)
+          end
         end
     end)
     if not ok then
@@ -788,13 +895,11 @@ local function tryLoad()
             sc = readfile("]] .. cachePath .. [[")
         end
     end)
-    -- 2) Fallback to GitHub
-    if not sc and game.HttpGet then
-        pcall(function()
-            sc = game:HttpGet("]] .. SKINCHANGER_GITHUB_URL .. [[")
-        end)
+    -- 3) Execute (no GitHub fallback: local cache only)
+    if not sc or sc == "" then
+        warn("[SkinChanger] no local cache")
+        return
     end
-    -- 3) Execute
     if sc and sc ~= "" then
         local Players = game:GetService("Players")
         local plr = Players.LocalPlayer
@@ -857,14 +962,11 @@ local function tryLoad()
         end
     end)
 
-    -- 2) Fallback to GitHub
-    if not sc and game.HttpGet then
-        pcall(function()
-            sc = game:HttpGet("]] .. SKINCHANGER_GITHUB_URL .. [[")
-        end)
+    -- 3) Execute with character-ready guard (no GitHub fallback: local cache only)
+    if not sc or sc == "" then
+        warn("[SkinChanger] no local cache")
+        return
     end
-
-    -- 3) Execute with character-ready guard
     if sc and sc ~= "" then
         local Players = game:GetService("Players")
         local plr = Players.LocalPlayer
@@ -1415,6 +1517,17 @@ end)
 ----------------------------------------------------------------
 function applySavedSkin(skinData)
     if not player.Character then return end
+    do
+        local settings = scReadSettings()
+        if type(settings.AllowedPlaceIds) == "table" and #settings.AllowedPlaceIds > 0 then
+            local pid = game.PlaceId
+            local ok = false
+            for _, v in ipairs(settings.AllowedPlaceIds) do
+                if tonumber(v) == pid then ok = true break end
+            end
+            if not ok then warn("[SkinChanger] PlaceId not whitelisted"); return end
+        end
+    end
     -- Set savedSkinData so HeadIcon can use characterClone from saved skin
     savedSkinData = skinData
     if setHeadIconAvatar and skinData and skinData.userId then
@@ -1422,7 +1535,7 @@ function applySavedSkin(skinData)
         lastAppliedSkinClone = skinData.characterClone
         setHeadIconAvatar(skinData.userId)
     end
-    
+
     -- Find and save the index of this skin in savedSkins
     for i, skin in ipairs(savedSkins) do
         if skin.playerName == skinData.playerName and skin.userId == skinData.userId then
@@ -1433,6 +1546,178 @@ function applySavedSkin(skinData)
             -- Always persist to Settings (used for reference/display; does NOT auto-apply on manual launch)
             pcall(function() scUpdateSetting("lastSkin", snapshot) end)
             break
+        end
+    end
+
+    -- R15: сначала удаляем ВСЕ существующие аксессуары/одежду базового скина —
+    -- ApplyDescription их не заменяет автоматически, а мержит → микс базового и нового.
+    -- Только после очистки применяем description целевого скина.
+    local function stripBaseAppearanceForR15()
+        local char = player.Character
+        if not char then return end
+        -- Аксессуары
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA("Accessory") then pcall(function() c:Destroy() end) end
+        end
+        -- Одежда
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA("Shirt") or c:IsA("Pants") or c:IsA("ShirtGraphic") then
+                pcall(function() c:Destroy() end)
+            end
+        end
+        -- CharacterMesh (R6 legacy на R15 персонажах бывает)
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA("CharacterMesh") then pcall(function() c:Destroy() end) end
+        end
+        -- ACC_ fake handles
+        for _, c in ipairs(char:GetChildren()) do
+            if c:IsA("BasePart") and c.Name:sub(1,4) == "ACC_" then
+                pcall(function() c:Destroy() end)
+            end
+        end
+    end
+
+    -- Ждём готовности Humanoid (после респавна создаётся асинхронно)
+    local function waitForCharReady(timeout)
+        local start = tick()
+        while tick() - start < timeout do
+            local ch = player.Character
+            if ch then
+                local h = ch:FindFirstChildOfClass("Humanoid")
+                local hrp = ch:FindFirstChild("HumanoidRootPart")
+                if h and hrp then return h end
+            end
+            task.wait(0.1)
+        end
+        return player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+    end
+
+    -- Хелпер: восстанавливаем face-декал после ApplyDescription.
+    -- ПРОБЛЕМА: ApplyDescription работает АСИНХРОННО — Roblox может добавить свою
+    -- дефолтную "face" decal (rbxasset://textures/face.png — классическая улыбка)
+    -- уже ПОСЛЕ того как мы поставили свою. В итоге на голове две decal,
+    -- обе видны одна поверх другой (эффект "две улыбки"), либо async add происходит
+    -- позже наших delays и классическая улыбка проступает.
+    -- РЕШЕНИЕ: держим watcher на несколько секунд, который непрерывно чистит
+    -- лишние face-decals и встроенные smiley — любая async вставка от Roblox сносится сразу.
+    local function makeFaceEnforcer(targetFaceUrl)
+        return function()
+            pcall(function()
+                local ch = player.Character
+                if not ch then return end
+                local h = ch:FindFirstChild("Head")
+                if not h then return end
+                local wantCustom = targetFaceUrl and targetFaceUrl ~= ""
+                -- Сносим ВСЕ лишние decal-и с именем "face".
+                -- Оставляем ОДНУ правильную с targetFaceUrl (если хотим кастомную) — только одну.
+                local kept = false
+                for _, child in ipairs(h:GetChildren()) do
+                    if child:IsA("Decal") and child.Name == "face" then
+                        if wantCustom and not kept and child.Texture == targetFaceUrl then
+                            kept = true  -- эта одна остаётся
+                        else
+                            child:Destroy()
+                        end
+                    end
+                end
+                if h:IsA("MeshPart") then h.TextureID = "" end
+                local sm = h:FindFirstChildOfClass("SpecialMesh")
+                if sm then sm.TextureId = "" end
+                if wantCustom and not kept then
+                    local nf = Instance.new("Decal")
+                    nf.Name = "face"; nf.Face = Enum.NormalId.Front
+                    nf.Texture = targetFaceUrl
+                    nf.Parent = h
+                end
+            end)
+        end
+    end
+
+    -- Запускаем watcher на 5 секунд, ПОДАВЛЯЯ предыдущий watcher того же apply-вызова.
+    -- Без этого 5 task.delay ниже создали бы 5 стакающихся Heartbeat-подписок → лаги.
+    -- Внешний глобальный _faceWatcherConn также сносим — чтобы не пересекаться со старым apply.
+    local watcherToken = 0
+    local function startFaceWatcher()
+        if skinData.face == nil then return end
+        watcherToken = watcherToken + 1
+        local myToken = watcherToken
+        -- Снимаем глобальный watcher от прошлого apply (если был активен).
+        if _G._SC_faceWatcherConn then
+            pcall(function() _G._SC_faceWatcherConn:Disconnect() end)
+            _G._SC_faceWatcherConn = nil
+        end
+        local enforce = makeFaceEnforcer(skinData.face)
+        enforce()
+        local startT = tick()
+        local conn
+        conn = game:GetService("RunService").Heartbeat:Connect(function()
+            -- Только последний token живой; предыдущие сносят себя сами.
+            if myToken ~= watcherToken or tick() - startT > 5.5 then
+                if conn then conn:Disconnect(); conn = nil end
+                if _G._SC_faceWatcherConn == conn then _G._SC_faceWatcherConn = nil end
+                return
+            end
+            enforce()
+        end)
+        _G._SC_faceWatcherConn = conn
+    end
+
+    -- Обратная совместимость: legacy-имя, вызывается task.delay ниже.
+    local function restoreFaceDecal()
+        startFaceWatcher()
+    end
+
+    if skinData.humanoidDescription then
+        local myHum = waitForCharReady(5)
+        if myHum then
+            local applied = false
+            pcall(function()
+                stripBaseAppearanceForR15()
+                task.wait()
+                myHum:ApplyDescription(skinData.humanoidDescription)
+                applied = true
+            end)
+            if applied then
+                -- Много повторов: ApplyDescription async может добавлять face-decal
+                -- в разное время (после чистки, после респавна) — покрываем все окна.
+                task.delay(0.1, restoreFaceDecal)
+                task.delay(0.3, restoreFaceDecal)
+                task.delay(0.7, restoreFaceDecal)
+                task.delay(1.5, restoreFaceDecal)
+                task.delay(3.0, restoreFaceDecal)
+                return
+            end
+        end
+    end
+    -- R15 из JSON: пересоберём HumanoidDescription из скалярных полей (если сохранены)
+    if skinData.r15DescFields then
+        local myHum = waitForCharReady(5)
+        if myHum then
+            local applied = false
+            pcall(function()
+                stripBaseAppearanceForR15()
+                task.wait()
+                local desc = Instance.new("HumanoidDescription")
+                for k, v in pairs(skinData.r15DescFields) do
+                    if type(v) == "table" and v.__color then
+                        pcall(function() desc[k] = Color3.new(v.r, v.g, v.b) end)
+                    else
+                        pcall(function() desc[k] = v end)
+                    end
+                end
+                myHum:ApplyDescription(desc)
+                applied = true
+            end)
+            if applied then
+                -- Много повторов: ApplyDescription async может добавлять face-decal
+                -- в разное время (после чистки, после респавна) — покрываем все окна.
+                task.delay(0.1, restoreFaceDecal)
+                task.delay(0.3, restoreFaceDecal)
+                task.delay(0.7, restoreFaceDecal)
+                task.delay(1.5, restoreFaceDecal)
+                task.delay(3.0, restoreFaceDecal)
+                return
+            end
         end
     end
 
@@ -1475,27 +1760,18 @@ function applySavedSkin(skinData)
 
     task.wait(1.5)
 
-    if skinData.bodyPartSizes then
-        for partName, sizeData in pairs(skinData.bodyPartSizes) do
-            local part = player.Character:FindFirstChild(partName)
-            if part and part:IsA("BasePart") then part.Size = Vector3.new(unpack(sizeData)) end
-        end
-        task.spawn(function()
-            task.wait(0.5)
-            for partName, sizeData in pairs(skinData.bodyPartSizes) do
-                local part = player.Character:FindFirstChild(partName)
-                if part and part:IsA("BasePart") then part.Size = Vector3.new(unpack(sizeData)) end
-            end
-        end)
-        task.spawn(function()
-            task.wait(1.5)
-            for partName, sizeData in pairs(skinData.bodyPartSizes) do
-                local part = player.Character:FindFirstChild(partName)
-                if part and part:IsA("BasePart") then part.Size = Vector3.new(unpack(sizeData)) end
-            end
-        end)
+    -- Детектим rig локального игрока
+    local myIsR15 = false
+    do
+        local h = player.Character:FindFirstChildOfClass("Humanoid")
+        if h and h.RigType == Enum.HumanoidRigType.R15 then myIsR15 = true end
+        if not myIsR15 and player.Character:FindFirstChild("UpperTorso") then myIsR15 = true end
     end
 
+    -- ПОРЯДОК ВАЖЕН для R15:
+    -- 1) сначала BodyScales.Value (Roblox запустит пересчёт при следующем set Size)
+    -- 2) потом part.Size (Roblox видит явный размер и не умножает повторно)
+    -- Для R6 порядок не важен (нет BodyScales).
     local myHumanoid = player.Character:FindFirstChild("Humanoid")
     if myHumanoid and skinData.bodyScales then
         pcall(function()
@@ -1504,6 +1780,42 @@ function applySavedSkin(skinData)
             if skinData.bodyScales.BodyHeightScale and myHumanoid:FindFirstChild("BodyHeightScale") then myHumanoid.BodyHeightScale.Value = skinData.bodyScales.BodyHeightScale end
             if skinData.bodyScales.HeadScale       and myHumanoid:FindFirstChild("HeadScale")       then myHumanoid.HeadScale.Value       = skinData.bodyScales.HeadScale end
         end)
+    end
+
+    if skinData.bodyPartSizes then
+        if myIsR15 then
+            -- R15: сохранённый Size уже финальный (умноженный на BodyScales target'а).
+            -- Ставим напрямую БЕЗ повторных установок в task.spawn — они триггерят
+            -- пересчёт от BodyScales локального игрока → двойное масштабирование
+            -- ("тапочек" или "гигант"). Одна установка Size после BodyScales — правильный порядок.
+            task.wait()
+            for partName, sizeData in pairs(skinData.bodyPartSizes) do
+                local part = player.Character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then
+                    pcall(function() part.Size = Vector3.new(unpack(sizeData)) end)
+                end
+            end
+        else
+            -- R6: старая логика (нет BodyScales-пересчёта, безопасно ретраить)
+            for partName, sizeData in pairs(skinData.bodyPartSizes) do
+                local part = player.Character:FindFirstChild(partName)
+                if part and part:IsA("BasePart") then part.Size = Vector3.new(unpack(sizeData)) end
+            end
+            task.spawn(function()
+                task.wait(0.5)
+                for partName, sizeData in pairs(skinData.bodyPartSizes) do
+                    local part = player.Character:FindFirstChild(partName)
+                    if part and part:IsA("BasePart") then part.Size = Vector3.new(unpack(sizeData)) end
+                end
+            end)
+            task.spawn(function()
+                task.wait(1.5)
+                for partName, sizeData in pairs(skinData.bodyPartSizes) do
+                    local part = player.Character:FindFirstChild(partName)
+                    if part and part:IsA("BasePart") then part.Size = Vector3.new(unpack(sizeData)) end
+                end
+            end)
+        end
     end
 
     for _, clothItem in ipairs(skinData.clothes or {}) do
@@ -1555,11 +1867,52 @@ function applySavedSkin(skinData)
     if myHead then
         local oldFace = myHead:FindFirstChild("face")
         if oldFace then oldFace:Destroy() end
-        if skinData.face then
+        if skinData.face and skinData.face ~= "" then
             local f = Instance.new("Decal")
             f.Name = "face"; f.Face = Enum.NormalId.Front; f.Texture = skinData.face
             f.Parent = myHead
         end
+        -- КРИТИЧНО ДЛЯ R6: встроенная smiley-текстура сидит в самом Head MeshPart.
+        -- Если у target'а не было SpecialMesh (skinData.headMesh == nil), Head остаётся
+        -- со встроенной smiley → она проступает сквозь face Decal с alpha-каналами.
+        -- Обнуляем TextureID на MeshPart, чтобы skin-face был единственным лицом.
+        pcall(function()
+            if myHead:IsA("MeshPart") then
+                myHead.TextureID = ""
+            end
+        end)
+
+        -- КРИТИЧНО: на респавне CharacterAdded применяет пустой HumanoidDescription
+        -- (Face=0) → Roblox АСИНХРОННО добавляет дефолтную face-decal со smiley уже
+        -- ПОСЛЕ этого блока. Планируем отложенные проверки, которые снесут/поставят
+        -- правильное лицо после того, как async ApplyDescription отработает.
+        local function enforceFace()
+            pcall(function()
+                local ch = player.Character
+                if not ch then return end
+                local h = ch:FindFirstChild("Head")
+                if not h then return end
+                local f = h:FindFirstChild("face")
+                if skinData.face and skinData.face ~= "" then
+                    if f and f:IsA("Decal") then
+                        f.Texture = skinData.face
+                    else
+                        local nf = Instance.new("Decal")
+                        nf.Name = "face"; nf.Face = Enum.NormalId.Front
+                        nf.Texture = skinData.face
+                        nf.Parent = h
+                    end
+                else
+                    if f then f:Destroy() end
+                    if h:IsA("MeshPart") then h.TextureID = "" end
+                    local sm = h:FindFirstChildOfClass("SpecialMesh")
+                    if sm then sm.TextureId = "" end
+                end
+            end)
+        end
+        task.delay(0.3, enforceFace)
+        task.delay(1.0, enforceFace)
+        task.delay(2.0, enforceFace)
     end
 
     if skinData.headMesh then
@@ -1574,6 +1927,16 @@ function applySavedSkin(skinData)
                 end
             end
         end
+    else
+        -- Нет сохранённого мешa: обнуляем TextureId у существующего SpecialMesh
+        -- чтобы встроенная smiley не показывалась поверх face Decal.
+        pcall(function()
+            local mh = player.Character:FindFirstChild("Head")
+            if mh then
+                local existing = mh:FindFirstChildOfClass("SpecialMesh")
+                if existing then existing.TextureId = "" end
+            end
+        end)
     end
 
     for _, item in ipairs(player.Character:GetChildren()) do
@@ -1703,6 +2066,7 @@ function applySavedSkin(skinData)
             end
         end)
     end
+
 end
 
 ----------------------------------------------------------------
@@ -1718,6 +2082,28 @@ function applySkin(targetPlayer)
     lastAppliedSkinUserId = targetPlayer.UserId
     lastAppliedSkinClone = nil
 
+    -- R15 → используем нативный API Roblox: HumanoidDescription содержит ВСЁ:
+    -- меши body-parts, размеры (BodyDepth/Width/Height/HeadScale), аксессуары (Hat/Hair/Face/Neck/...),
+    -- BodyColors, Face (Decal), Clothing. ApplyDescription делает то же что при спавне игрока,
+    -- Roblox сам корректно скейлит аксессуары под HeadScale, применяет меши и т.д.
+    -- Ручное копирование Handle.Size + MeshId + Motor6D давало огромные волосы и кривые размеры.
+    local targetHum = targetChar:FindFirstChildOfClass("Humanoid")
+    local myHum = player.Character:FindFirstChildOfClass("Humanoid")
+    local targetIsR15 = targetHum and targetHum.RigType == Enum.HumanoidRigType.R15
+                        or targetChar:FindFirstChild("UpperTorso") ~= nil
+    local myIsR15 = myHum and myHum.RigType == Enum.HumanoidRigType.R15
+                    or player.Character:FindFirstChild("UpperTorso") ~= nil
+    local usedDescription = false
+    if targetIsR15 and myIsR15 and targetHum and myHum then
+        pcall(function()
+            local desc = targetHum:GetAppliedDescription()
+            if desc then
+                myHum:ApplyDescription(desc)
+                usedDescription = true
+            end
+        end)
+    end
+
     savedSkinData = {
         playerName      = targetPlayer.Name,
         userId          = targetPlayer.UserId,
@@ -1727,10 +2113,10 @@ function applySkin(targetPlayer)
         headMesh        = nil,
         characterMeshes = {},
         accessories     = {},
+        r15Description  = usedDescription and targetIsR15 or nil,  -- маркер для savedSkinData
     }
 
     -- Capture a frozen clone for HeadIcon before any delayed viewport update.
-    -- This fixes live player skins showing only a plain head without hair/accessories.
     pcall(function()
         local oldArchivable = targetChar.Archivable
         targetChar.Archivable = true
@@ -1745,6 +2131,75 @@ function applySkin(targetPlayer)
         setHeadIconAvatar(targetPlayer.UserId)
         task.delay(1.5, updateHeadIconViewport)
         task.delay(3, updateHeadIconViewport)
+    end
+
+    -- Если R15 успешно применён через HumanoidDescription — сохраняем description
+    -- для respawn-восстановления и выходим (весь ручной путь ниже избыточен для R15).
+    if usedDescription then
+        pcall(function()
+            local desc = targetHum:GetAppliedDescription()
+            if desc then
+                savedSkinData.humanoidDescription = desc  -- Instance хранится в памяти
+            end
+        end)
+        -- FACE: HumanoidDescription.Face содержит только catalog id. Если у игрока face
+        -- через кастомный Decal (не из каталога) — сохраняем Texture отдельно и после
+        -- ApplyDescription восстанавливаем на локальном игроке.
+        pcall(function()
+            local tHead = targetChar:FindFirstChild("Head")
+            if tHead then
+                local f = tHead:FindFirstChild("face")
+                if f and f.Texture and f.Texture ~= "" then
+                    savedSkinData.face = f.Texture
+                    -- Применяем сразу на локального игрока.
+                    -- Сносим ВСЕ существующие "face" decals (может быть несколько
+                    -- из-за async ApplyDescription) + встроенные smiley → одна decal.
+                    local myHead = player.Character and player.Character:FindFirstChild("Head")
+                    local savedFaceUrl = f.Texture
+                    local function enforce()
+                        if not myHead or not myHead.Parent then return end
+                        pcall(function()
+                            for _, child in ipairs(myHead:GetChildren()) do
+                                if child:IsA("Decal") and child.Name == "face" then
+                                    child:Destroy()
+                                end
+                            end
+                            if myHead:IsA("MeshPart") then myHead.TextureID = "" end
+                            local sm = myHead:FindFirstChildOfClass("SpecialMesh")
+                            if sm then sm.TextureId = "" end
+                            local nf = Instance.new("Decal")
+                            nf.Name = "face"; nf.Face = Enum.NormalId.Front
+                            nf.Texture = savedFaceUrl
+                            nf.Parent = myHead
+                        end)
+                    end
+                    if myHead then
+                        task.delay(0.1, enforce)
+                        task.delay(0.3, enforce)
+                        task.delay(0.7, enforce)
+                        task.delay(1.5, enforce)
+                        task.delay(3.0, enforce)
+                    end
+                else
+                    -- У target'а НЕТ face-декала (или он пустой) — сохраняем сентинел "",
+                    -- чтобы при apply убрать дефолтную улыбку от ApplyDescription.
+                    savedSkinData.face = ""
+                    local myHead = player.Character and player.Character:FindFirstChild("Head")
+                    if myHead then
+                        task.delay(0.3, function()
+                            pcall(function()
+                                local mf = myHead:FindFirstChild("face")
+                                if mf then mf:Destroy() end
+                                if myHead:IsA("MeshPart") then myHead.TextureID = "" end
+                                local sm = myHead:FindFirstChildOfClass("SpecialMesh")
+                                if sm then sm.TextureId = "" end
+                            end)
+                        end)
+                    end
+                end
+            end
+        end)
+        return
     end
 
     for _, item in ipairs(targetChar:GetChildren()) do
@@ -1768,7 +2223,14 @@ function applySkin(targetPlayer)
     local targetHead = targetChar:FindFirstChild("Head")
     if targetHead then
         local f = targetHead:FindFirstChild("face")
-        if f then savedSkinData.face = f.Texture end
+        if f then
+            savedSkinData.face = f.Texture
+        else
+            -- Сентинел "нет лица у target'а" — иначе после респавна ApplyDescription
+            -- восстановит дефолтную улыбку, а applySavedSkin не будет знать что face
+            -- НАДО удалить (nil-ветку он трактует как "нет данных").
+            savedSkinData.face = ""
+        end
         local m = targetHead:FindFirstChildOfClass("SpecialMesh")
         if m then
             local clone = m:Clone()
@@ -1939,6 +2401,10 @@ function applySkin(targetPlayer)
     if player.Character and savedSkinData and savedSkinData.accessories then
         for _, accessory in ipairs(savedSkinData.accessories) do
             pcall(function()
+                if type(accessory) == "table" and accessory.isLayered == true then
+                    warn("[SkinChanger] Skipping layered clothing:", accessory.Name)
+                    return
+                end
                 local accName = (type(accessory) == "table") and (accessory.Name or "") or accessory.Name
                 local nameLower = accName:lower()
                 if nameLower:find("glass") or nameLower:find("thinround") or nameLower:find("slot20")
@@ -1998,6 +2464,34 @@ function applySkin(targetPlayer)
                 end
                 if not myAttachment then return end
 
+                -- R15 корректор: HandleSize мы захватили с target'а как handle × его HeadScale.
+                -- Если применяем на нашего R15 персонажа с другим HeadScale — аксессуары становятся
+                -- гигантскими/крошечными. Корректируем ratio, чтобы визуально совпадало с оригиналом.
+                local myIsR15Local = player.Character:FindFirstChildOfClass("Humanoid")
+                    and player.Character:FindFirstChildOfClass("Humanoid").RigType == Enum.HumanoidRigType.R15
+                    or player.Character:FindFirstChild("UpperTorso") ~= nil
+                if myIsR15Local then
+                    -- targetHeadScale: приоритет taggedInfo > targetChar > 1.0
+                    local targetHeadScale = 1.0
+                    if type(accessory) == "table" and accessory.TargetHeadScale then
+                        targetHeadScale = accessory.TargetHeadScale
+                    elseif targetChar then
+                        local tHum = targetChar:FindFirstChildOfClass("Humanoid")
+                        if tHum and tHum:FindFirstChild("HeadScale") then
+                            targetHeadScale = tHum.HeadScale.Value or 1
+                        end
+                    end
+                    local myHs = player.Character:FindFirstChildOfClass("Humanoid")
+                    if myHs and myHs:FindFirstChild("HeadScale") then
+                        local myHeadScale = myHs.HeadScale.Value or 1
+                        if targetHeadScale > 0 and math.abs(myHeadScale - targetHeadScale) > 0.01 then
+                            local ratio = myHeadScale / targetHeadScale
+                            handleSize = { handleSize[1]*ratio, handleSize[2]*ratio, handleSize[3]*ratio }
+                            meshScale = { meshScale[1]*ratio, meshScale[2]*ratio, meshScale[3]*ratio }
+                        end
+                    end
+                end
+
                 -- Create visual handle part
                 local vh = Instance.new("Part")
                 vh.Name = "ACC_" .. accName
@@ -2030,6 +2524,10 @@ function applySkin(targetPlayer)
 
     local th = targetChar:FindFirstChild("Humanoid")
     local mh = player.Character:FindFirstChild("Humanoid")
+    local targetIsR15 = th and th.RigType == Enum.HumanoidRigType.R15
+                        or targetChar:FindFirstChild("UpperTorso") ~= nil
+
+    -- Правильный порядок для R15: сначала BodyScales, потом MeshId+Size (иначе двойное масштабирование).
     if mh and th then
         pcall(function()
             if th:FindFirstChild("BodyDepthScale")  and mh:FindFirstChild("BodyDepthScale")  then mh.BodyDepthScale.Value  = th.BodyDepthScale.Value end
@@ -2037,6 +2535,42 @@ function applySkin(targetPlayer)
             if th:FindFirstChild("BodyHeightScale") and mh:FindFirstChild("BodyHeightScale") then mh.BodyHeightScale.Value = th.BodyHeightScale.Value end
             if th:FindFirstChild("HeadScale")       and mh:FindFirstChild("HeadScale")       then mh.HeadScale.Value       = th.HeadScale.Value end
         end)
+    end
+
+    -- КОПИРУЕМ MESHID И SIZE BODY-PARTS. Без этого форма тела остаётся своя (только цвет меняется)
+    -- → "все скины выглядят средними". Особенно важно для R15 Anthro/Rthro меши (тонкие руки/маленькая голова).
+    task.wait()  -- даём Roblox обработать BodyScales
+    local bodyPartNames = {"Head","Torso","Left Arm","Right Arm","Left Leg","Right Leg",
+        "LeftUpperArm","LeftLowerArm","LeftHand","RightUpperArm","RightLowerArm","RightHand",
+        "LeftUpperLeg","LeftLowerLeg","LeftFoot","RightUpperLeg","RightLowerLeg","RightFoot",
+        "UpperTorso","LowerTorso"}
+    for _, partName in ipairs(bodyPartNames) do
+        local tPart = targetChar:FindFirstChild(partName)
+        local mPart = player.Character:FindFirstChild(partName)
+        if tPart and mPart and tPart:IsA("BasePart") and mPart:IsA("BasePart") then
+            pcall(function()
+                -- MeshPart: копируем MeshId + TextureID
+                if tPart:IsA("MeshPart") and mPart:IsA("MeshPart") then
+                    mPart.MeshId    = tPart.MeshId
+                    mPart.TextureID = tPart.TextureID
+                elseif tPart:IsA("BasePart") then
+                    -- SpecialMesh
+                    local tMesh = tPart:FindFirstChildOfClass("SpecialMesh")
+                    if tMesh then
+                        local mMesh = mPart:FindFirstChildOfClass("SpecialMesh")
+                        if not mMesh then
+                            mMesh = Instance.new("SpecialMesh"); mMesh.Parent = mPart
+                        end
+                        mMesh.MeshId    = tMesh.MeshId
+                        mMesh.TextureId = tMesh.TextureId
+                        mMesh.Scale     = tMesh.Scale
+                        mMesh.MeshType  = tMesh.MeshType
+                    end
+                end
+                -- Size (важно для R15 — форма частей). Для R15 после BodyScales это override → без double-scale.
+                mPart.Size = tPart.Size
+            end)
+        end
     end
 end
 
@@ -2189,6 +2723,16 @@ function captureSkinSnapshot(targetPlayer)
 
     pcall(function() skinData.characterClone = targetChar:Clone() end)
 
+    -- R15: захватываем HumanoidDescription target'а — нативный API Roblox,
+    -- содержит все меши, скалы, аксессуары в правильных пропорциях.
+    pcall(function()
+        local tHum = targetChar:FindFirstChildOfClass("Humanoid")
+        if tHum and tHum.RigType == Enum.HumanoidRigType.R15 then
+            local desc = tHum:GetAppliedDescription()
+            if desc then skinData.humanoidDescription = desc end
+        end
+    end)
+
     for _, item in ipairs(targetChar:GetChildren()) do
         if item:IsA("Shirt") or item:IsA("Pants") or item:IsA("ShirtGraphic") then
             local clone = item:Clone()
@@ -2304,6 +2848,12 @@ function captureSkinSnapshot(targetPlayer)
                         meshScale = {mesh.Scale.X, mesh.Scale.Y, mesh.Scale.Z}
                     end
                     if meshId == "" then return end
+                    local isLayered = false
+                    pcall(function()
+                        if handle:FindFirstChildOfClass("WrapLayer") or handle:FindFirstChild("WrapTarget") then
+                            isLayered = true
+                        end
+                    end)
                     local accData = {
                         Name               = item.Name,
                         MeshId             = meshId,
@@ -2314,6 +2864,7 @@ function captureSkinSnapshot(targetPlayer)
                         HandleSize         = {handle.Size.X, handle.Size.Y, handle.Size.Z},
                         HandleTransparency = handle.Transparency,
                         IsMeshPart         = handle:IsA("MeshPart"),
+                        isLayered          = isLayered,
                     }
                     if att then
                         local x,y,z,r00,r01,r02,r10,r11,r12,r20,r21,r22 = att.CFrame:GetComponents()
@@ -2610,7 +3161,7 @@ local logoTitle = Instance.new("TextLabel")
 logoTitle.Size = UDim2.new(1, -30, 0, 22)
 logoTitle.Position = UDim2.new(0, 30, 0, 22)
 logoTitle.BackgroundTransparency = 1
-logoTitle.Text = "SKIN CHANGER"
+logoTitle.Text = lightMenu and "Skin Changer Remake" or "SKIN CHANGER"
 logoTitle.TextColor3 = C.TEXT
 logoTitle.TextSize = 19
 logoTitle.Font = FONT_TITLE
@@ -2716,6 +3267,10 @@ end
 local playersBtn   = makeNavButton("PLAYERS",   "players",   1)
 local savedBtn     = makeNavButton("SAVED",     "saved",     2)
 local settingsBtn  = makeNavButton("SETTINGS",  "settings",  3)
+-- MENU tab: только в Light Menu режиме. menuBtn кладём в navButtons["menu"] и
+-- не создаём отдельный local — экономия регистров главного chunk (лимит 200).
+-- Всегда создаём MENU nav-кнопку, видимость управляется syncLightMenu().
+makeNavButton("MENU", "menu", 4)
 
 ----------------------------------------------------------------
 -- CLOSE BUTTON (luxury X)
@@ -2725,6 +3280,106 @@ closeButton.Name = "Close"
 closeButton.AnchorPoint = Vector2.new(1, 0.5)
 closeButton.Position = UDim2.new(1, -22, 0.5, 0)
 closeButton.ZIndex = 3
+
+----------------------------------------------------------------
+-- RIG TYPE INDICATOR (R6/R15) — только в Low Menu, слева от X (видимость через syncLightMenu)
+----------------------------------------------------------------
+do
+    local rigLbl = Instance.new("TextLabel")
+    rigLbl.Name = "RigTypeLbl"
+    rigLbl.AnchorPoint = Vector2.new(1, 0.5)
+    rigLbl.Position = UDim2.new(1, -66, 0.5, 0)
+    rigLbl.Size = UDim2.fromOffset(52, 22)
+    rigLbl.BackgroundColor3 = C.BG_PANEL2
+    rigLbl.BackgroundTransparency = 0.15
+    rigLbl.BorderSizePixel = 0
+    rigLbl.Text = "..."
+    rigLbl.TextColor3 = Theme.primary
+    rigLbl.TextSize = 12
+    rigLbl.Font = FONT_BOLD
+    rigLbl.ZIndex = 3
+    rigLbl.Parent = topBar
+    corner(rigLbl, 6)
+    themeText(rigLbl, "primary")
+    themeStrokeC(stroke(rigLbl, Theme.primary, 1, 0.4), "primary")
+
+    -- Определяем rig-type: R15 если есть UpperTorso, иначе R6.
+    -- Обновляем на CharacterAdded (rig может смениться после респавна на серверах где это разрешено).
+    local function detectRig()
+        local ch = player.Character
+        if not ch then rigLbl.Text = "..."; return end
+        local hum = ch:FindFirstChildOfClass("Humanoid")
+        local rigType = "?"
+        if hum then
+            if hum.RigType == Enum.HumanoidRigType.R15 or ch:FindFirstChild("UpperTorso") then
+                rigType = "R15"
+            else
+                rigType = "R6"
+            end
+        elseif ch:FindFirstChild("UpperTorso") then
+            rigType = "R15"
+        elseif ch:FindFirstChild("Torso") then
+            rigType = "R6"
+        end
+        rigLbl.Text = rigType
+    end
+    task.spawn(function() task.wait(1); pcall(detectRig) end)
+    player.CharacterAdded:Connect(function() task.wait(1); pcall(detectRig) end)
+
+    -- syncLightMenu: применяет текущий lightMenu к UI (nav-бар, заголовок, MENU tab, rigLbl, palette).
+    -- Вызывается при старте и после переключения LOW MENU-тумблера. Глобальна для доступа
+    -- из moveIndicatorTo и обработчика тумблера.
+    function syncLightMenu()
+        pcall(function() rigLbl.Visible = lightMenu end)
+        pcall(function() logoTitle.Text = lightMenu and "Skin Changer Remake" or "SKIN CHANGER" end)
+        local mBtn = navButtons and navButtons["menu"]
+        if mBtn then mBtn.Visible = lightMenu end
+        if lightMenu then
+            pcall(function() navBar.Size = UDim2.new(0, 432, 0, 44) end)
+            for _, btn in pairs(navButtons) do
+                pcall(function() btn.Size = UDim2.new(0, 76, 1, -8) btn.TextSize = 11 end)
+            end
+            pcall(function() navIndicator.Size = UDim2.new(0, 76, 1, -8) end)
+        else
+            pcall(function() navBar.Size = UDim2.new(0, 408, 0, 44) end)
+            for _, btn in pairs(navButtons) do
+                pcall(function() btn.Size = UDim2.new(0, 92, 1, -8) btn.TextSize = 12 end)
+            end
+            pcall(function() navIndicator.Size = UDim2.new(0, 92, 1, -8) end)
+            -- если сейчас выбрана вкладка menu — переключаем на players
+            if currentPage == "menu" and switchPage then pcall(switchPage, "players") end
+        end
+        -- Settings-page rearrangement
+        if settingsPage then
+            local mcr = settingsPage:FindFirstChild("MenuColorRow")
+            local hint = settingsPage:FindFirstChild("PaletteHint")
+            local ms = settingsPage:FindFirstChild("MoreSkinsRow")
+            local lm = settingsPage:FindFirstChild("LightMenuRow")
+            local kb = settingsPage:FindFirstChild("MenuKeybindRow")
+            local hi = settingsPage:FindFirstChild("HideIconRow")
+            if lightMenu then
+                if mcr then mcr.Visible = false end
+                if hint then hint.Visible = false end
+                if ms then ms.Position = UDim2.new(0, 10, 0, 10) end
+                if lm then lm.Position = UDim2.new(0, 10, 0, 90) end
+                if kb then kb.Position = UDim2.new(0, 10, 0, 170) end
+                if hi then hi.Position = UDim2.new(0, 10, 0, 250) end
+            else
+                if mcr then mcr.Visible = true end
+                if hint then hint.Visible = true end
+                if ms then ms.Position = UDim2.new(0, 10, 0, 90) end
+                if lm then lm.Position = UDim2.new(0, 10, 0, 170) end
+                if kb then kb.Position = UDim2.new(0, 10, 0, 250) end
+                if hi then hi.Position = UDim2.new(0, 10, 0, 330) end
+            end
+        end
+        -- moveIndicator to current page (правит позицию индикатора при смене nav-размера)
+        if moveIndicatorTo and currentPage then
+            task.defer(function() pcall(moveIndicatorTo, currentPage, false) end)
+        end
+    end
+    task.defer(function() pcall(syncLightMenu) end)
+end
 
 ----------------------------------------------------------------
 -- DRAG (за top bar)
@@ -3283,183 +3938,754 @@ settingsPage.Visible = false
 settingsPage.ZIndex = 2
 settingsPage.Parent = pagesArea
 
-local menuColorRow = Instance.new("Frame")
-menuColorRow.Size = UDim2.new(1, -20, 0, 70)
-menuColorRow.Position = UDim2.new(0, 10, 0, 10)
-menuColorRow.BackgroundColor3 = C.BG_CARD
-menuColorRow.BackgroundTransparency = 0.05
-menuColorRow.BorderSizePixel = 0
-menuColorRow.ZIndex = 2
-menuColorRow.Parent = settingsPage
-corner(menuColorRow, 10)
-local mcRowStroke = stroke(menuColorRow, Theme.dark, 1, 0.45)
-themeStrokeC(mcRowStroke, "dark")
+-- MENU PAGE (light-mode only). ScrollingFrame кладём в pagesArea:MenuPage,
+-- ссылаемся через FindFirstChild — не занимает local в главном chunk (лимит 200).
+do
+    local mp = Instance.new("ScrollingFrame")
+    mp.Name = "MenuPage"
+    mp.Size = UDim2.new(1, 0, 1, 0)
+    mp.BackgroundTransparency = 1
+    mp.BorderSizePixel = 0
+    mp.ScrollBarThickness = 3
+    mp.ScrollBarImageColor3 = Theme.primary
+    mp.ScrollBarImageTransparency = 0.4
+    mp.CanvasSize = UDim2.new(0, 0, 0, 0)
+    mp.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    mp.Visible = false
+    mp.ZIndex = 2
+    mp.Parent = pagesArea
+    onTheme(function(t) mp.ScrollBarImageColor3 = t.primary end)
+end
 
-local mcAccent = Instance.new("Frame")
-mcAccent.Size = UDim2.fromOffset(3, 30)
-mcAccent.Position = UDim2.new(0, 14, 0.5, -15)
-mcAccent.BackgroundColor3 = Theme.primary
-mcAccent.BorderSizePixel = 0
-mcAccent.ZIndex = 3
-mcAccent.Parent = menuColorRow
-corner(mcAccent, 2)
-themeBg(mcAccent, "primary")
+-- Общий layout для карточек в Menu-вкладке
+-- ВАЖНО: обёрнуто в do+функцию, чтобы её локалы не забивали
+-- 200-регистровый лимит главного chunk'а (иначе Luau падает на другой строке).
+do local function buildLightMenuTab()
+    local menuPage = pagesArea:FindFirstChild("MenuPage")
+    if not menuPage then return end
+    local mpLayout = Instance.new("UIListLayout")
+    mpLayout.Padding = UDim.new(0, 10)
+    mpLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    mpLayout.Parent = menuPage
+    padd(menuPage, 10, 10, 10, 10)
 
-local mcTitle = Instance.new("TextLabel")
-mcTitle.Position = UDim2.new(0, 28, 0, 14)
-mcTitle.Size = UDim2.new(0, 240, 0, 18)
-mcTitle.BackgroundTransparency = 1
-mcTitle.Text = "MENU COLOR"
-mcTitle.TextColor3 = C.TEXT
-mcTitle.TextSize = 14
-mcTitle.Font = FONT_BOLD
-mcTitle.TextXAlignment = Enum.TextXAlignment.Left
-mcTitle.ZIndex = 3
-mcTitle.Parent = menuColorRow
+    -- Хелпер: карточка в стиле moreSkinsRow/lightMenuRow
+    local function mkCard(order, title, desc)
+        local row = Instance.new("Frame")
+        row.Size = UDim2.new(1, -8, 0, 70)
+        row.LayoutOrder = order
+        row.BackgroundColor3 = C.BG_CARD
+        row.BackgroundTransparency = 0.05
+        row.BorderSizePixel = 0
+        row.ZIndex = 2
+        row.Parent = menuPage
+        corner(row, 10)
+        local rowStroke = stroke(row, Theme.dark, 1, 0.45)
+        themeStrokeC(rowStroke, "dark")
 
-local mcDesc = Instance.new("TextLabel")
-mcDesc.Position = UDim2.new(0, 28, 0, 36)
-mcDesc.Size = UDim2.new(0, 360, 0, 16)
-mcDesc.BackgroundTransparency = 1
-mcDesc.Text = "Customize the accent palette of your menu"
-mcDesc.TextColor3 = C.TEXT_MUTE
-mcDesc.TextSize = 11
-mcDesc.Font = FONT_REG
-mcDesc.TextXAlignment = Enum.TextXAlignment.Left
-mcDesc.ZIndex = 3
-mcDesc.Parent = menuColorRow
+        local accent = Instance.new("Frame")
+        accent.Size = UDim2.fromOffset(3, 30)
+        accent.Position = UDim2.new(0, 14, 0.5, -15)
+        accent.BackgroundColor3 = Theme.primary
+        accent.BorderSizePixel = 0
+        accent.ZIndex = 3
+        accent.Parent = row
+        corner(accent, 2)
+        themeBg(accent, "primary")
 
-local mcCurrent = Instance.new("Frame")
-mcCurrent.AnchorPoint = Vector2.new(1, 0.5)
-mcCurrent.Position = UDim2.new(1, -140, 0.5, 0)
-mcCurrent.Size = UDim2.fromOffset(22, 22)
-mcCurrent.BackgroundColor3 = Theme.primary
-mcCurrent.BorderSizePixel = 0
-mcCurrent.ZIndex = 3
-mcCurrent.Parent = menuColorRow
-corner(mcCurrent, 6)
-local mcCurrentStroke = stroke(mcCurrent, Theme.dark, 1, 0)
-themeBg(mcCurrent, "primary")
-themeStrokeC(mcCurrentStroke, "dark")
+        local t = Instance.new("TextLabel")
+        t.Position = UDim2.new(0, 28, 0, 14)
+        t.Size = UDim2.new(0, 240, 0, 18)
+        t.BackgroundTransparency = 1
+        t.Text = title
+        t.TextColor3 = C.TEXT
+        t.TextSize = 14
+        t.Font = FONT_BOLD
+        t.TextXAlignment = Enum.TextXAlignment.Left
+        t.ZIndex = 3
+        t.Parent = row
 
-local mcToggle = Instance.new("TextButton")
-mcToggle.AnchorPoint = Vector2.new(1, 0.5)
-mcToggle.Position = UDim2.new(1, -16, 0.5, 0)
-mcToggle.Size = UDim2.fromOffset(110, 36)
-mcToggle.BackgroundColor3 = C.BG_PANEL2
-mcToggle.Text = "OPEN"
-mcToggle.TextColor3 = C.TEXT_DIM
-mcToggle.TextSize = 11
-mcToggle.Font = FONT_BOLD
-mcToggle.AutoButtonColor = false
-mcToggle.BorderSizePixel = 0
-mcToggle.ZIndex = 3
-mcToggle.Parent = menuColorRow
-corner(mcToggle, 8)
-local mcToggleStroke = stroke(mcToggle, C.TEXT_MUTE, 1, 0.6)
+        local d = Instance.new("TextLabel")
+        d.Position = UDim2.new(0, 28, 0, 36)
+        d.Size = UDim2.new(0, 360, 0, 16)
+        d.BackgroundTransparency = 1
+        d.Text = desc or ""
+        d.TextColor3 = C.TEXT_MUTE
+        d.TextSize = 11
+        d.Font = FONT_REG
+        d.TextXAlignment = Enum.TextXAlignment.Left
+        d.ZIndex = 3
+        d.Parent = row
 
--- More Skins row
-local moreSkinsRow = Instance.new("Frame")
-moreSkinsRow.Size = UDim2.new(1, -20, 0, 70)
-moreSkinsRow.Position = UDim2.new(0, 10, 0, 90)
-moreSkinsRow.BackgroundColor3 = C.BG_CARD
-moreSkinsRow.BackgroundTransparency = 0.05
-moreSkinsRow.BorderSizePixel = 0
-moreSkinsRow.ZIndex = 2
-moreSkinsRow.Parent = settingsPage
-corner(moreSkinsRow, 10)
-local msRowStroke = stroke(moreSkinsRow, Theme.dark, 1, 0.45)
-themeStrokeC(msRowStroke, "dark")
+        return row
+    end
 
-local msAccent = Instance.new("Frame")
-msAccent.Size = UDim2.fromOffset(3, 30)
-msAccent.Position = UDim2.new(0, 14, 0.5, -15)
-msAccent.BackgroundColor3 = Theme.primary
-msAccent.BorderSizePixel = 0
-msAccent.ZIndex = 3
-msAccent.Parent = moreSkinsRow
-corner(msAccent, 2)
-themeBg(msAccent, "primary")
+    -- Хелпер: кнопка ENABLED/DISABLED справа
+    local function mkToggleBtn(parent, initialOn)
+        local b = Instance.new("TextButton")
+        b.AnchorPoint = Vector2.new(1, 0.5)
+        b.Position = UDim2.new(1, -16, 0.5, 0)
+        b.Size = UDim2.fromOffset(110, 36)
+        b.BackgroundColor3 = C.BG_PANEL2
+        b.Text = initialOn and "ENABLED" or "DISABLED"
+        b.TextColor3 = C.TEXT_DIM
+        b.TextSize = 11
+        b.Font = FONT_BOLD
+        b.AutoButtonColor = false
+        b.BorderSizePixel = 0
+        b.ZIndex = 3
+        b.Parent = parent
+        corner(b, 8)
+        stroke(b, C.TEXT_MUTE, 1, 0.6)
+        b.MouseEnter:Connect(function()
+            tween(b, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
+        end)
+        b.MouseLeave:Connect(function()
+            tween(b, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
+        end)
+        return b
+    end
 
-local msTitle = Instance.new("TextLabel")
-msTitle.Position = UDim2.new(0, 28, 0, 14)
-msTitle.Size = UDim2.new(0, 240, 0, 18)
-msTitle.BackgroundTransparency = 1
-msTitle.Text = "MORE SKINS"
-msTitle.TextColor3 = C.TEXT
-msTitle.TextSize = 14
-msTitle.Font = FONT_BOLD
-msTitle.TextXAlignment = Enum.TextXAlignment.Left
-msTitle.ZIndex = 3
-msTitle.Parent = moreSkinsRow
-
-local msDesc = Instance.new("TextLabel")
-msDesc.Position = UDim2.new(0, 28, 0, 36)
-msDesc.Size = UDim2.new(0, 360, 0, 16)
-msDesc.BackgroundTransparency = 1
-msDesc.Text = "Save multiple different skins from the same player"
-msDesc.TextColor3 = C.TEXT_MUTE
-msDesc.TextSize = 11
-msDesc.Font = FONT_REG
-msDesc.TextXAlignment = Enum.TextXAlignment.Left
-msDesc.ZIndex = 3
-msDesc.Parent = moreSkinsRow
-
-local msToggle = Instance.new("TextButton")
-msToggle.AnchorPoint = Vector2.new(1, 0.5)
-msToggle.Position = UDim2.new(1, -16, 0.5, 0)
-msToggle.Size = UDim2.fromOffset(110, 36)
-msToggle.BackgroundColor3 = C.BG_PANEL2
-msToggle.Text = moreSkinsEnabled and "ENABLED" or "DISABLED"
-msToggle.TextColor3 = C.TEXT_DIM
-msToggle.TextSize = 11
-msToggle.Font = FONT_BOLD
-msToggle.AutoButtonColor = false
-msToggle.BorderSizePixel = 0
-msToggle.ZIndex = 3
-msToggle.Parent = moreSkinsRow
-corner(msToggle, 8)
-local msToggleStroke = stroke(msToggle, C.TEXT_MUTE, 1, 0.6)
-
--- Tooltip on hover: describes when to enable this feature (English)
-local msTooltip = Instance.new("TextLabel")
-msTooltip.AnchorPoint = Vector2.new(1, 0)
-msTooltip.Position = UDim2.new(1, -16, 0, 4)
-msTooltip.Size = UDim2.fromOffset(300, 44)
-msTooltip.BackgroundColor3 = C.BG_DEEP
-msTooltip.BackgroundTransparency = 0.05
-msTooltip.BorderSizePixel = 0
-msTooltip.Text = "Enable this if you want to save more than one skin from the same player (e.g. your friend changes outfits and you want to keep both)."
-msTooltip.TextColor3 = C.TEXT
-msTooltip.TextSize = 11
-msTooltip.Font = FONT_REG
-msTooltip.TextWrapped = true
-msTooltip.TextXAlignment = Enum.TextXAlignment.Left
-msTooltip.TextYAlignment = Enum.TextYAlignment.Top
-msTooltip.Visible = false
-msTooltip.ZIndex = 50
-msTooltip.Parent = moreSkinsRow
-corner(msTooltip, 6)
-padd(msTooltip, 6, 6, 6, 6)
-local msTipStroke = stroke(msTooltip, Theme.primary, 1, 0.3)
-themeStrokeC(msTipStroke, "primary")
-
-msToggle.MouseEnter:Connect(function()
-    tween(msToggle, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
-    msTooltip.Visible = true
-end)
-msToggle.MouseLeave:Connect(function()
-    tween(msToggle, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
-    msTooltip.Visible = false
-end)
-
-msToggle.MouseButton1Click:Connect(function()
-    moreSkinsEnabled = not moreSkinsEnabled
-    msToggle.Text = moreSkinsEnabled and "ENABLED" or "DISABLED"
-    pcall(function()
-        scUpdateSetting("moreSkins", moreSkinsEnabled and "Enable" or "Disable")
+    -- === 1. SHADERS ===
+    local shRow = mkCard(1, "SHADERS", "Toggle atmospheric lighting presets")
+    local shBtn = mkToggleBtn(shRow, activeShaderPreset ~= nil)
+    shBtn.Text = activeShaderPreset or "OFF"
+    shBtn.MouseButton1Click:Connect(function()
+        -- Циклический перебор: OFF -> Sunset -> Night -> OFF
+        if activeShaderPreset == nil then
+            pcall(function() applyShaderPreset("Sunset") end)
+        elseif activeShaderPreset == "Sunset" then
+            pcall(function() applyShaderPreset("Night") end)
+        else
+            pcall(function() if removeShader then removeShader() end end)
+        end
+        shBtn.Text = activeShaderPreset or "OFF"
     end)
-end)
+
+    -- === 2. MENU COLOR (palette grid inside card) ===
+    local mcRow = Instance.new("Frame")
+    mcRow.Size = UDim2.new(1, -8, 0, 130)
+    mcRow.LayoutOrder = 2
+    mcRow.BackgroundColor3 = C.BG_CARD
+    mcRow.BackgroundTransparency = 0.05
+    mcRow.BorderSizePixel = 0
+    mcRow.ZIndex = 2
+    mcRow.Parent = menuPage
+    corner(mcRow, 10)
+    local mcRowStroke2 = stroke(mcRow, Theme.dark, 1, 0.45)
+    themeStrokeC(mcRowStroke2, "dark")
+
+    local mcAcc2 = Instance.new("Frame")
+    mcAcc2.Size = UDim2.fromOffset(3, 30)
+    mcAcc2.Position = UDim2.new(0, 14, 0, 20)
+    mcAcc2.BackgroundColor3 = Theme.primary
+    mcAcc2.BorderSizePixel = 0
+    mcAcc2.ZIndex = 3
+    mcAcc2.Parent = mcRow
+    corner(mcAcc2, 2)
+    themeBg(mcAcc2, "primary")
+
+    local mcTitle2 = Instance.new("TextLabel")
+    mcTitle2.Position = UDim2.new(0, 28, 0, 14)
+    mcTitle2.Size = UDim2.new(0, 240, 0, 18)
+    mcTitle2.BackgroundTransparency = 1
+    mcTitle2.Text = "MENU COLOR"
+    mcTitle2.TextColor3 = C.TEXT
+    mcTitle2.TextSize = 14
+    mcTitle2.Font = FONT_BOLD
+    mcTitle2.TextXAlignment = Enum.TextXAlignment.Left
+    mcTitle2.ZIndex = 3
+    mcTitle2.Parent = mcRow
+
+    local mcDesc2 = Instance.new("TextLabel")
+    mcDesc2.Position = UDim2.new(0, 28, 0, 36)
+    mcDesc2.Size = UDim2.new(0, 360, 0, 16)
+    mcDesc2.BackgroundTransparency = 1
+    mcDesc2.Text = "Pick an accent swatch"
+    mcDesc2.TextColor3 = C.TEXT_MUTE
+    mcDesc2.TextSize = 11
+    mcDesc2.Font = FONT_REG
+    mcDesc2.TextXAlignment = Enum.TextXAlignment.Left
+    mcDesc2.ZIndex = 3
+    mcDesc2.Parent = mcRow
+
+    local swRow2 = Instance.new("Frame")
+    swRow2.Position = UDim2.new(0, 20, 0, 62)
+    swRow2.Size = UDim2.new(1, -40, 0, 56)
+    swRow2.BackgroundTransparency = 1
+    swRow2.ZIndex = 3
+    swRow2.Parent = mcRow
+
+    local swLay2 = Instance.new("UIListLayout")
+    swLay2.FillDirection = Enum.FillDirection.Horizontal
+    swLay2.HorizontalAlignment = Enum.HorizontalAlignment.Left
+    swLay2.VerticalAlignment = Enum.VerticalAlignment.Center
+    swLay2.Padding = UDim.new(0, 8)
+    swLay2.SortOrder = Enum.SortOrder.LayoutOrder
+    swLay2.Parent = swRow2
+
+    local mpSwatches = {}
+    for i, tm in ipairs(THEMES) do
+        local sw = Instance.new("TextButton")
+        sw.Name = tm.name
+        sw.Size = UDim2.fromOffset(40, 40)
+        sw.BackgroundColor3 = tm.primary
+        sw.Text = ""
+        sw.AutoButtonColor = false
+        sw.BorderSizePixel = 0
+        sw.LayoutOrder = i
+        sw.ZIndex = 4
+        sw.Parent = swRow2
+        corner(sw, 10)
+        gradient(sw, ColorSequence.new(tm.primary, tm.dark), 135)
+        local sStr = stroke(sw, tm.dark, 1.5, 0)
+
+        local ring = Instance.new("Frame")
+        ring.AnchorPoint = Vector2.new(0.5, 0.5)
+        ring.Position = UDim2.fromScale(0.5, 0.5)
+        ring.Size = UDim2.fromOffset(46, 46)
+        ring.BackgroundTransparency = 1
+        ring.BorderSizePixel = 0
+        ring.ZIndex = 3
+        ring.Parent = sw
+        corner(ring, 12)
+        local ringS = stroke(ring, C.WHITE, 2, tm.name == activeThemeName and 0 or 1)
+
+        table.insert(mpSwatches, {btn = sw, theme = tm, ring = ringS, stroke = sStr})
+
+        sw.MouseEnter:Connect(function()
+            tween(sw, 0.15, {Size = UDim2.fromOffset(44, 44)})
+            tween(sStr, 0.15, {Thickness = 2})
+        end)
+        sw.MouseLeave:Connect(function()
+            tween(sw, 0.15, {Size = UDim2.fromOffset(40, 40)})
+            tween(sStr, 0.15, {Thickness = 1.5})
+        end)
+        sw.MouseButton1Click:Connect(function() applyTheme(tm) end)
+    end
+    onTheme(function()
+        for _, s in ipairs(mpSwatches) do
+            tween(s.ring, 0.2, {Transparency = (s.theme.name == activeThemeName) and 0 or 1})
+        end
+    end)
+
+    -- === 3. AUTOEXEC ===
+    local aeRow = mkCard(3, "AUTOEXEC", "Auto-load skin on rejoin/teleport")
+    local aeBtn = mkToggleBtn(aeRow, false)
+    pcall(function()
+        if scIsAutoexecEnabled and scIsAutoexecEnabled() then
+            aeBtn.Text = "ENABLED"
+        end
+    end)
+    aeBtn.MouseButton1Click:Connect(function()
+        local newState = aeBtn.Text ~= "ENABLED"
+        aeBtn.Text = newState and "ENABLED" or "DISABLED"
+        pcall(function() scSetAutoexecEnabled(newState) end)
+        if newState then
+            pcall(function()
+                local idx = lastAppliedSkinIndex
+                if idx and savedSkins[idx] then
+                    local s = savedSkins[idx]
+                    scSetLastSkinIfAutoexec({ index = idx, userId = s.userId, playerName = s.playerName })
+                end
+            end)
+            pcall(saveScriptToLocalCache)
+            pcall(createAutoInjectScripts)
+            pcall(setupQueueOnTeleport)
+        else
+            pcall(removeAutoInjectScripts)
+        end
+    end)
+
+    -- === 4. MENU KEYBIND (duplicate of Settings card, shared state) ===
+    local mkbRow = mkCard(4, "MENU KEYBIND", "Click and press any key")
+    local mkbBtn = mkToggleBtn(mkbRow, false)
+    mkbBtn.Text = menuKeybindName
+    local mkbWaiting = false
+    local mkbConn = nil
+    mkbBtn.MouseButton1Click:Connect(function()
+        if mkbWaiting then return end
+        mkbWaiting = true
+        mkbBtn.Text = "Press any key..."
+        mkbConn = UserInputService.InputBegan:Connect(function(input, gp)
+            if input.KeyCode == Enum.KeyCode.Escape or input.UserInputType == Enum.UserInputType.MouseButton2 then
+                mkbBtn.Text = menuKeybindName
+                mkbWaiting = false
+                if mkbConn then mkbConn:Disconnect() mkbConn = nil end
+                return
+            end
+            if input.KeyCode ~= Enum.KeyCode.Unknown then
+                menuKeybindName = input.KeyCode.Name
+                mkbBtn.Text = menuKeybindName
+                pcall(function() scUpdateSetting("MenuKeybind", menuKeybindName) end)
+                mkbWaiting = false
+                if mkbConn then mkbConn:Disconnect() mkbConn = nil end
+            end
+        end)
+    end)
+
+    -- === 5. CLOSE SCRIPT ===
+    local csRow = mkCard(5, "CLOSE SCRIPT", "Fully disable Skin Changer")
+    local csBtn = mkToggleBtn(csRow, false)
+    csBtn.Text = "CLOSE"
+    csBtn.TextColor3 = C.DANGER
+    csBtn.MouseButton1Click:Connect(function()
+        scriptDisabled = true
+        pcall(function() if removeSunsetShader then removeSunsetShader() end end)
+        pcall(function() if removeShader then removeShader() end end)
+        -- scriptConnections объявлен ниже как local; берём через getgenv-singleton
+        local st = getgenv and getgenv().__SkinChangerPremiumSingleton or nil
+        if st and st.connections then
+            for _, c in pairs(st.connections) do pcall(function() c:Disconnect() end) end
+        end
+        if g_takeOffGlasses then pcall(g_takeOffGlasses) end
+        glassesHidden = false
+        if hideGlassesWorldMenus then pcall(function() hideGlassesWorldMenus(false, true) end) end
+        -- g_glassesOpen/g_shouldRestoreGlasses — файловые locals ниже; script:Destroy() всё равно всё убивает.
+        task.wait(0.3)
+        pcall(function() script:Destroy() end)
+    end)
+end
+pcall(buildLightMenuTab)  -- всегда строим содержимое, показ управляется syncLightMenu
+end -- close do-block
+
+-- MENU COLOR row (обёрнута в do — освобождает 9 регистров главного chunk,
+-- Luau падал с "Out of local registers" на строке 6427/7226; лимит = 200).
+-- Внешние ссылки: settingsPage:FindFirstChild("MenuColorRow"),
+--                 menuColorRow:FindFirstChild("MCToggle") — для togglePalette и sc-if.
+local menuColorRow  -- ссылка нужна ниже для if lightMenu then menuColorRow.Visible=false
+do
+    local row = Instance.new("Frame")
+    row.Name = "MenuColorRow"
+    row.Size = UDim2.new(1, -20, 0, 70)
+    row.Position = UDim2.new(0, 10, 0, 10)
+    row.BackgroundColor3 = C.BG_CARD
+    row.BackgroundTransparency = 0.05
+    row.BorderSizePixel = 0
+    row.ZIndex = 2
+    row.Parent = settingsPage
+    corner(row, 10)
+    themeStrokeC(stroke(row, Theme.dark, 1, 0.45), "dark")
+    menuColorRow = row
+
+    local ac = Instance.new("Frame")
+    ac.Size = UDim2.fromOffset(3, 30)
+    ac.Position = UDim2.new(0, 14, 0.5, -15)
+    ac.BackgroundColor3 = Theme.primary
+    ac.BorderSizePixel = 0
+    ac.ZIndex = 3
+    ac.Parent = row
+    corner(ac, 2)
+    themeBg(ac, "primary")
+
+    local t = Instance.new("TextLabel")
+    t.Position = UDim2.new(0, 28, 0, 14)
+    t.Size = UDim2.new(0, 240, 0, 18)
+    t.BackgroundTransparency = 1
+    t.Text = "MENU COLOR"
+    t.TextColor3 = C.TEXT
+    t.TextSize = 14
+    t.Font = FONT_BOLD
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = row
+
+    local d = Instance.new("TextLabel")
+    d.Position = UDim2.new(0, 28, 0, 36)
+    d.Size = UDim2.new(0, 360, 0, 16)
+    d.BackgroundTransparency = 1
+    d.Text = "Customize the accent palette of your menu"
+    d.TextColor3 = C.TEXT_MUTE
+    d.TextSize = 11
+    d.Font = FONT_REG
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.ZIndex = 3
+    d.Parent = row
+
+    local cur = Instance.new("Frame")
+    cur.AnchorPoint = Vector2.new(1, 0.5)
+    cur.Position = UDim2.new(1, -140, 0.5, 0)
+    cur.Size = UDim2.fromOffset(22, 22)
+    cur.BackgroundColor3 = Theme.primary
+    cur.BorderSizePixel = 0
+    cur.ZIndex = 3
+    cur.Parent = row
+    corner(cur, 6)
+    themeBg(cur, "primary")
+    themeStrokeC(stroke(cur, Theme.dark, 1, 0), "dark")
+
+    local btn = Instance.new("TextButton")
+    btn.Name = "MCToggle"
+    btn.AnchorPoint = Vector2.new(1, 0.5)
+    btn.Position = UDim2.new(1, -16, 0.5, 0)
+    btn.Size = UDim2.fromOffset(110, 36)
+    btn.BackgroundColor3 = C.BG_PANEL2
+    btn.Text = "OPEN"
+    btn.TextColor3 = C.TEXT_DIM
+    btn.TextSize = 11
+    btn.Font = FONT_BOLD
+    btn.AutoButtonColor = false
+    btn.BorderSizePixel = 0
+    btn.ZIndex = 3
+    btn.Parent = row
+    corner(btn, 8)
+    stroke(btn, C.TEXT_MUTE, 1, 0.6)
+end
+
+-- MORE SKINS row (do-блок освобождает ещё 10 регистров главного chunk).
+local moreSkinsRow  -- ссылка нужна ниже для if lightMenu then moreSkinsRow.Position=...
+do
+    local row = Instance.new("Frame")
+    row.Name = "MoreSkinsRow"
+    row.Size = UDim2.new(1, -20, 0, 70)
+    row.Position = UDim2.new(0, 10, 0, 90)
+    row.BackgroundColor3 = C.BG_CARD
+    row.BackgroundTransparency = 0.05
+    row.BorderSizePixel = 0
+    row.ZIndex = 2
+    row.Parent = settingsPage
+    corner(row, 10)
+    themeStrokeC(stroke(row, Theme.dark, 1, 0.45), "dark")
+    moreSkinsRow = row
+
+    local ac = Instance.new("Frame")
+    ac.Size = UDim2.fromOffset(3, 30)
+    ac.Position = UDim2.new(0, 14, 0.5, -15)
+    ac.BackgroundColor3 = Theme.primary
+    ac.BorderSizePixel = 0
+    ac.ZIndex = 3
+    ac.Parent = row
+    corner(ac, 2)
+    themeBg(ac, "primary")
+
+    local t = Instance.new("TextLabel")
+    t.Position = UDim2.new(0, 28, 0, 14)
+    t.Size = UDim2.new(0, 240, 0, 18)
+    t.BackgroundTransparency = 1
+    t.Text = "MORE SKINS"
+    t.TextColor3 = C.TEXT
+    t.TextSize = 14
+    t.Font = FONT_BOLD
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = row
+
+    local d = Instance.new("TextLabel")
+    d.Position = UDim2.new(0, 28, 0, 36)
+    d.Size = UDim2.new(0, 360, 0, 16)
+    d.BackgroundTransparency = 1
+    d.Text = "Save multiple different skins from the same player"
+    d.TextColor3 = C.TEXT_MUTE
+    d.TextSize = 11
+    d.Font = FONT_REG
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.ZIndex = 3
+    d.Parent = row
+
+    local b = Instance.new("TextButton")
+    b.AnchorPoint = Vector2.new(1, 0.5)
+    b.Position = UDim2.new(1, -16, 0.5, 0)
+    b.Size = UDim2.fromOffset(110, 36)
+    b.BackgroundColor3 = C.BG_PANEL2
+    b.Text = moreSkinsEnabled and "ENABLED" or "DISABLED"
+    b.TextColor3 = C.TEXT_DIM
+    b.TextSize = 11
+    b.Font = FONT_BOLD
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.ZIndex = 3
+    b.Parent = row
+    corner(b, 8)
+    stroke(b, C.TEXT_MUTE, 1, 0.6)
+
+    local tip = Instance.new("TextLabel")
+    tip.AnchorPoint = Vector2.new(1, 0)
+    tip.Position = UDim2.new(1, -16, 0, 4)
+    tip.Size = UDim2.fromOffset(300, 44)
+    tip.BackgroundColor3 = C.BG_DEEP
+    tip.BackgroundTransparency = 0.05
+    tip.BorderSizePixel = 0
+    tip.Text = "Enable this if you want to save more than one skin from the same player (e.g. your friend changes outfits and you want to keep both)."
+    tip.TextColor3 = C.TEXT
+    tip.TextSize = 11
+    tip.Font = FONT_REG
+    tip.TextWrapped = true
+    tip.TextXAlignment = Enum.TextXAlignment.Left
+    tip.TextYAlignment = Enum.TextYAlignment.Top
+    tip.Visible = false
+    tip.ZIndex = 50
+    tip.Parent = row
+    corner(tip, 6)
+    padd(tip, 6, 6, 6, 6)
+    themeStrokeC(stroke(tip, Theme.primary, 1, 0.3), "primary")
+
+    b.MouseEnter:Connect(function()
+        tween(b, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
+        tip.Visible = true
+    end)
+    b.MouseLeave:Connect(function()
+        tween(b, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
+        tip.Visible = false
+    end)
+
+    b.MouseButton1Click:Connect(function()
+        moreSkinsEnabled = not moreSkinsEnabled
+        b.Text = moreSkinsEnabled and "ENABLED" or "DISABLED"
+        pcall(function()
+            scUpdateSetting("moreSkins", moreSkinsEnabled and "Enable" or "Disable")
+        end)
+    end)
+end
+
+----------------------------------------------------------------
+-- LIGHT MENU + MENU KEYBIND cards
+-- Обёрнуты в do-блоки: без них ~14 локалов оставались в главном chunk
+-- и переполняли 200-регистровый лимит Luau (падение на строке 6427).
+-- Именам карточек, которые нужны позже для перепозиционирования,
+-- присваиваем атрибуты settingsPage, не занимая слоты главного chunk.
+----------------------------------------------------------------
+do
+    local row = Instance.new("Frame")
+    row.Name = "LightMenuRow"
+    row.Size = UDim2.new(1, -20, 0, 70)
+    row.Position = UDim2.new(0, 10, 0, 170)
+    row.BackgroundColor3 = C.BG_CARD
+    row.BackgroundTransparency = 0.05
+    row.BorderSizePixel = 0
+    row.ZIndex = 2
+    row.Parent = settingsPage
+    corner(row, 10)
+    themeStrokeC(stroke(row, Theme.dark, 1, 0.45), "dark")
+
+    local ac = Instance.new("Frame")
+    ac.Size = UDim2.fromOffset(3, 30)
+    ac.Position = UDim2.new(0, 14, 0.5, -15)
+    ac.BackgroundColor3 = Theme.primary
+    ac.BorderSizePixel = 0
+    ac.ZIndex = 3
+    ac.Parent = row
+    corner(ac, 2)
+    themeBg(ac, "primary")
+
+    local t = Instance.new("TextLabel")
+    t.Position = UDim2.new(0, 28, 0, 14)
+    t.Size = UDim2.new(0, 240, 0, 18)
+    t.BackgroundTransparency = 1
+    t.Text = "LOW MENU"
+    t.TextColor3 = C.TEXT
+    t.TextSize = 14
+    t.Font = FONT_BOLD
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = row
+
+    local d = Instance.new("TextLabel")
+    d.Position = UDim2.new(0, 28, 0, 36)
+    d.Size = UDim2.new(0, 360, 0, 16)
+    d.BackgroundTransparency = 1
+    d.Text = "Restart script to apply"
+    d.TextColor3 = C.TEXT_MUTE
+    d.TextSize = 11
+    d.Font = FONT_REG
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.ZIndex = 3
+    d.Parent = row
+
+    local b = Instance.new("TextButton")
+    b.AnchorPoint = Vector2.new(1, 0.5)
+    b.Position = UDim2.new(1, -16, 0.5, 0)
+    b.Size = UDim2.fromOffset(110, 36)
+    b.BackgroundColor3 = C.BG_PANEL2
+    b.Text = lightMenu and "ENABLED" or "DISABLED"
+    b.TextColor3 = C.TEXT_DIM
+    b.TextSize = 11
+    b.Font = FONT_BOLD
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.ZIndex = 3
+    b.Parent = row
+    corner(b, 8)
+    stroke(b, C.TEXT_MUTE, 1, 0.6)
+    b.MouseButton1Click:Connect(function()
+        lightMenu = not lightMenu
+        b.Text = lightMenu and "ENABLED" or "DISABLED"
+        pcall(function() scUpdateSetting("LightMenu", lightMenu) end)
+        if lightMenu then
+            -- Снимаем очки и прячем 3D-панели
+            pcall(function() if hideGlassesWorldMenus then hideGlassesWorldMenus(false, true) end end)
+            pcall(function() if g_takeOffGlasses then g_takeOffGlasses() end end)
+        end
+        -- Применяем новый режим live (nav-бар, MENU tab, заголовок, rig, Settings-layout)
+        if syncLightMenu then pcall(syncLightMenu) end
+        -- Закрываем и открываем меню, чтобы новая раскладка сразу применилась к виду
+        task.spawn(function()
+            if closeMenu then pcall(closeMenu) end
+            task.wait(0.35)
+            if openMenu then pcall(openMenu) end
+        end)
+    end)
+end
+
+do
+    local row = Instance.new("Frame")
+    row.Name = "MenuKeybindRow"
+    row.Size = UDim2.new(1, -20, 0, 70)
+    row.Position = UDim2.new(0, 10, 0, 250)
+    row.BackgroundColor3 = C.BG_CARD
+    row.BackgroundTransparency = 0.05
+    row.BorderSizePixel = 0
+    row.ZIndex = 2
+    row.Parent = settingsPage
+    corner(row, 10)
+    themeStrokeC(stroke(row, Theme.dark, 1, 0.45), "dark")
+
+    local ac = Instance.new("Frame")
+    ac.Size = UDim2.fromOffset(3, 30)
+    ac.Position = UDim2.new(0, 14, 0.5, -15)
+    ac.BackgroundColor3 = Theme.primary
+    ac.BorderSizePixel = 0
+    ac.ZIndex = 3
+    ac.Parent = row
+    corner(ac, 2)
+    themeBg(ac, "primary")
+
+    local t = Instance.new("TextLabel")
+    t.Position = UDim2.new(0, 28, 0, 14)
+    t.Size = UDim2.new(0, 240, 0, 18)
+    t.BackgroundTransparency = 1
+    t.Text = "MENU KEYBIND"
+    t.TextColor3 = C.TEXT
+    t.TextSize = 14
+    t.Font = FONT_BOLD
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = row
+
+    local d = Instance.new("TextLabel")
+    d.Position = UDim2.new(0, 28, 0, 36)
+    d.Size = UDim2.new(0, 360, 0, 16)
+    d.BackgroundTransparency = 1
+    d.Text = "Click and press any key"
+    d.TextColor3 = C.TEXT_MUTE
+    d.TextSize = 11
+    d.Font = FONT_REG
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.ZIndex = 3
+    d.Parent = row
+
+    local b = Instance.new("TextButton")
+    b.AnchorPoint = Vector2.new(1, 0.5)
+    b.Position = UDim2.new(1, -16, 0.5, 0)
+    b.Size = UDim2.fromOffset(110, 36)
+    b.BackgroundColor3 = C.BG_PANEL2
+    b.Text = menuKeybindName
+    b.TextColor3 = C.TEXT_DIM
+    b.TextSize = 11
+    b.Font = FONT_BOLD
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.ZIndex = 3
+    b.Parent = row
+    corner(b, 8)
+    stroke(b, C.TEXT_MUTE, 1, 0.6)
+
+    local waiting = false
+    local conn = nil
+    b.MouseButton1Click:Connect(function()
+        if waiting then return end
+        waiting = true
+        b.Text = "Press any key..."
+        conn = UserInputService.InputBegan:Connect(function(input, gp)
+            if input.KeyCode == Enum.KeyCode.Escape or input.UserInputType == Enum.UserInputType.MouseButton2 then
+                b.Text = menuKeybindName
+                waiting = false
+                if conn then conn:Disconnect() conn = nil end
+                return
+            end
+            if input.KeyCode ~= Enum.KeyCode.Unknown then
+                menuKeybindName = input.KeyCode.Name
+                b.Text = menuKeybindName
+                pcall(function() scUpdateSetting("MenuKeybind", menuKeybindName) end)
+                waiting = false
+                if conn then conn:Disconnect() conn = nil end
+            end
+        end)
+    end)
+end
+
+-- HIDE ICON карточка: скрывает HeadIcon над головой; состояние в SkinChanger_Settings.HideIcon
+do
+    local row = Instance.new("Frame")
+    row.Name = "HideIconRow"
+    row.Size = UDim2.new(1, -20, 0, 70)
+    row.Position = UDim2.new(0, 10, 0, 330)
+    row.BackgroundColor3 = C.BG_CARD
+    row.BackgroundTransparency = 0.05
+    row.BorderSizePixel = 0
+    row.ZIndex = 2
+    row.Parent = settingsPage
+    corner(row, 10)
+    themeStrokeC(stroke(row, Theme.dark, 1, 0.45), "dark")
+
+    local ac = Instance.new("Frame")
+    ac.Size = UDim2.fromOffset(3, 30)
+    ac.Position = UDim2.new(0, 14, 0.5, -15)
+    ac.BackgroundColor3 = Theme.primary
+    ac.BorderSizePixel = 0
+    ac.ZIndex = 3
+    ac.Parent = row
+    corner(ac, 2)
+    themeBg(ac, "primary")
+
+    local t = Instance.new("TextLabel")
+    t.Position = UDim2.new(0, 28, 0, 14)
+    t.Size = UDim2.new(0, 240, 0, 18)
+    t.BackgroundTransparency = 1
+    t.Text = "HIDE ICON"
+    t.TextColor3 = C.TEXT
+    t.TextSize = 14
+    t.Font = FONT_BOLD
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = row
+
+    local d = Instance.new("TextLabel")
+    d.Position = UDim2.new(0, 28, 0, 36)
+    d.Size = UDim2.new(0, 360, 0, 16)
+    d.BackgroundTransparency = 1
+    d.Text = "Hide the floating icon above your head"
+    d.TextColor3 = C.TEXT_MUTE
+    d.TextSize = 11
+    d.Font = FONT_REG
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.ZIndex = 3
+    d.Parent = row
+
+    local b = Instance.new("TextButton")
+    b.AnchorPoint = Vector2.new(1, 0.5)
+    b.Position = UDim2.new(1, -16, 0.5, 0)
+    b.Size = UDim2.fromOffset(110, 36)
+    b.BackgroundColor3 = C.BG_PANEL2
+    b.Text = _G.__SC_hideIcon and "ENABLED" or "DISABLED"
+    b.TextColor3 = C.TEXT_DIM
+    b.TextSize = 11
+    b.Font = FONT_BOLD
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.ZIndex = 3
+    b.Parent = row
+    corner(b, 8)
+    stroke(b, C.TEXT_MUTE, 1, 0.6)
+    b.MouseButton1Click:Connect(function()
+        _G.__SC_hideIcon = not _G.__SC_hideIcon
+        b.Text = _G.__SC_hideIcon and "ENABLED" or "DISABLED"
+        pcall(function() scUpdateSetting("HideIcon", _G.__SC_hideIcon) end)
+        -- Применяем к HeadIcon сразу
+        pcall(function()
+            if headIcon then headIcon.Visible = not _G.__SC_hideIcon end
+        end)
+    end)
+end
 
 local hintLabel = Instance.new("TextLabel")
 hintLabel.AnchorPoint = Vector2.new(0.5, 1)
@@ -3473,128 +4699,134 @@ hintLabel.Font = FONT_REG
 hintLabel.ZIndex = 2
 hintLabel.Parent = settingsPage
 
+-- Позиционирование карточек Settings в Low Menu режиме делает syncLightMenu()
+pcall(function() hintLabel.Name = "PaletteHint" end)
+
 ----------------------------------------------------------------
--- PALETTE PANEL
+-- PALETTE PANEL (do-блок освобождает 8 регистров; togglePalette остаётся
+-- глобальным, palettePanel/mcToggle находим через FindFirstChild).
 ----------------------------------------------------------------
-local paletteHost = Instance.new("Frame")
-paletteHost.AnchorPoint = Vector2.new(0.5, 1)
-paletteHost.Size = UDim2.fromOffset(440, 110)
-paletteHost.Position = UDim2.new(0.5, 0, 1, -8)
-paletteHost.BackgroundTransparency = 1
-paletteHost.BorderSizePixel = 0
-paletteHost.ClipsDescendants = true
-paletteHost.ZIndex = 60
-paletteHost.Parent = mainContainer
+do
+    local host = Instance.new("Frame")
+    host.Name = "PaletteHost"
+    host.AnchorPoint = Vector2.new(0.5, 1)
+    host.Size = UDim2.fromOffset(440, 110)
+    host.Position = UDim2.new(0.5, 0, 1, -8)
+    host.BackgroundTransparency = 1
+    host.BorderSizePixel = 0
+    host.ClipsDescendants = true
+    host.ZIndex = 60
+    host.Parent = mainContainer
 
-local palettePanel = Instance.new("Frame")
-palettePanel.AnchorPoint = Vector2.new(0.5, 1)
-palettePanel.Size = UDim2.fromOffset(420, 84)
-palettePanel.Position = UDim2.new(0.5, 0, 1, 130)
-palettePanel.BackgroundColor3 = C.BG_PANEL
-palettePanel.BackgroundTransparency = 0.05
-palettePanel.BorderSizePixel = 0
-palettePanel.ZIndex = 60
-palettePanel.Parent = paletteHost
-corner(palettePanel, 12)
+    local panel = Instance.new("Frame")
+    panel.Name = "PalettePanel"
+    panel.AnchorPoint = Vector2.new(0.5, 1)
+    panel.Size = UDim2.fromOffset(420, 84)
+    panel.Position = UDim2.new(0.5, 0, 1, 130)
+    panel.BackgroundColor3 = C.BG_PANEL
+    panel.BackgroundTransparency = 0.05
+    panel.BorderSizePixel = 0
+    panel.ZIndex = 60
+    panel.Parent = host
+    corner(panel, 12)
 
-gradient(palettePanel, ColorSequence.new{
-    ColorSequenceKeypoint.new(0, C.BG_PANEL2),
-    ColorSequenceKeypoint.new(1, C.BG_DEEP),
-}, 90)
+    gradient(panel, ColorSequence.new{
+        ColorSequenceKeypoint.new(0, C.BG_PANEL2),
+        ColorSequenceKeypoint.new(1, C.BG_DEEP),
+    }, 90)
 
-local paletteStroke = stroke(palettePanel, Theme.dark, 1.2, 0.1)
-themeStrokeC(paletteStroke, "dark")
-applyArtDecoCorners(palettePanel, 12, 1, nil, 4)
+    themeStrokeC(stroke(panel, Theme.dark, 1.2, 0.1), "dark")
+    applyArtDecoCorners(panel, 12, 1, nil, 4)
 
-local swatchRow = Instance.new("Frame")
-swatchRow.Size = UDim2.new(1, -20, 1, -20)
-swatchRow.Position = UDim2.new(0, 10, 0, 10)
-swatchRow.BackgroundTransparency = 1
-swatchRow.ZIndex = 61
-swatchRow.Parent = palettePanel
+    local sw_row = Instance.new("Frame")
+    sw_row.Size = UDim2.new(1, -20, 1, -20)
+    sw_row.Position = UDim2.new(0, 10, 0, 10)
+    sw_row.BackgroundTransparency = 1
+    sw_row.ZIndex = 61
+    sw_row.Parent = panel
 
-local swLayout = Instance.new("UIListLayout")
-swLayout.FillDirection = Enum.FillDirection.Horizontal
-swLayout.HorizontalAlignment = Enum.HorizontalAlignment.Center
-swLayout.VerticalAlignment = Enum.VerticalAlignment.Center
-swLayout.Padding = UDim.new(0, 8)
-swLayout.SortOrder = Enum.SortOrder.LayoutOrder
-swLayout.Parent = swatchRow
+    local lay = Instance.new("UIListLayout")
+    lay.FillDirection = Enum.FillDirection.Horizontal
+    lay.HorizontalAlignment = Enum.HorizontalAlignment.Center
+    lay.VerticalAlignment = Enum.VerticalAlignment.Center
+    lay.Padding = UDim.new(0, 8)
+    lay.SortOrder = Enum.SortOrder.LayoutOrder
+    lay.Parent = sw_row
 
-local swatches = {}
-for i, t in ipairs(THEMES) do
-    local sw = Instance.new("TextButton")
-    sw.Name = t.name
-    sw.Size = UDim2.fromOffset(40, 40)
-    sw.BackgroundColor3 = t.primary
-    sw.Text = ""
-    sw.AutoButtonColor = false
-    sw.BorderSizePixel = 0
-    sw.LayoutOrder = i
-    sw.ZIndex = 62
-    sw.Parent = swatchRow
-    corner(sw, 10)
-    gradient(sw, ColorSequence.new(t.primary, t.dark), 135)
-    local sStroke = stroke(sw, t.dark, 1.5, 0)
+    local sws = {}
+    for i, t in ipairs(THEMES) do
+        local sw = Instance.new("TextButton")
+        sw.Name = t.name
+        sw.Size = UDim2.fromOffset(40, 40)
+        sw.BackgroundColor3 = t.primary
+        sw.Text = ""
+        sw.AutoButtonColor = false
+        sw.BorderSizePixel = 0
+        sw.LayoutOrder = i
+        sw.ZIndex = 62
+        sw.Parent = sw_row
+        corner(sw, 10)
+        gradient(sw, ColorSequence.new(t.primary, t.dark), 135)
+        local sStroke = stroke(sw, t.dark, 1.5, 0)
 
-    local activeRing = Instance.new("Frame")
-    activeRing.AnchorPoint = Vector2.new(0.5, 0.5)
-    activeRing.Position = UDim2.fromScale(0.5, 0.5)
-    activeRing.Size = UDim2.fromOffset(46, 46)
-    activeRing.BackgroundTransparency = 1
-    activeRing.BorderSizePixel = 0
-    activeRing.ZIndex = 61
-    activeRing.Parent = sw
-    corner(activeRing, 12)
-    local ringStroke = stroke(activeRing, C.WHITE, 2, t.name == activeThemeName and 0 or 1)
+        local ring = Instance.new("Frame")
+        ring.AnchorPoint = Vector2.new(0.5, 0.5)
+        ring.Position = UDim2.fromScale(0.5, 0.5)
+        ring.Size = UDim2.fromOffset(46, 46)
+        ring.BackgroundTransparency = 1
+        ring.BorderSizePixel = 0
+        ring.ZIndex = 61
+        ring.Parent = sw
+        corner(ring, 12)
+        local ringS = stroke(ring, C.WHITE, 2, t.name == activeThemeName and 0 or 1)
 
-    table.insert(swatches, {btn=sw, theme=t, ring=ringStroke, stroke=sStroke})
+        table.insert(sws, {btn=sw, theme=t, ring=ringS, stroke=sStroke})
 
-    sw.MouseEnter:Connect(function()
-        tween(sw, 0.15, {Size = UDim2.fromOffset(44, 44)})
-        tween(sStroke, 0.15, {Thickness = 2})
+        sw.MouseEnter:Connect(function()
+            tween(sw, 0.15, {Size = UDim2.fromOffset(44, 44)})
+            tween(sStroke, 0.15, {Thickness = 2})
+        end)
+        sw.MouseLeave:Connect(function()
+            tween(sw, 0.15, {Size = UDim2.fromOffset(40, 40)})
+            tween(sStroke, 0.15, {Thickness = 1.5})
+        end)
+        sw.MouseButton1Click:Connect(function() applyTheme(t) end)
+    end
+
+    onTheme(function()
+        for _, s in ipairs(sws) do
+            tween(s.ring, 0.2, {Transparency = (s.theme.name == activeThemeName) and 0 or 1})
+        end
     end)
-    sw.MouseLeave:Connect(function()
-        tween(sw, 0.15, {Size = UDim2.fromOffset(40, 40)})
-        tween(sStroke, 0.15, {Thickness = 1.5})
-    end)
-    sw.MouseButton1Click:Connect(function() applyTheme(t) end)
-end
 
-onTheme(function()
-    for _, s in ipairs(swatches) do
-        if s.theme.name == activeThemeName then
-            tween(s.ring, 0.2, {Transparency = 0})
+    local open = false
+    local mcBtn = menuColorRow:FindFirstChild("MCToggle")
+    function togglePalette(force)
+        local target
+        if force == nil then target = not open else target = force end
+        if target == open then return end
+        open = target
+        if target then
+            tween(panel, 0.45, {Position = UDim2.new(0.5, 0, 1, -8)},
+                  Enum.EasingStyle.Back, Enum.EasingDirection.Out)
+            if mcBtn then mcBtn.Text = "CLOSE" end
         else
-            tween(s.ring, 0.2, {Transparency = 1})
+            tween(panel, 0.35, {Position = UDim2.new(0.5, 0, 1, 130)},
+                  Enum.EasingStyle.Quint, Enum.EasingDirection.In)
+            if mcBtn then mcBtn.Text = "OPEN" end
         end
     end
-end)
 
-local paletteOpen = false
-function togglePalette(force)
-    local target
-    if force == nil then target = not paletteOpen else target = force end
-    if target == paletteOpen then return end
-    paletteOpen = target
-    if target then
-        tween(palettePanel, 0.45, {Position = UDim2.new(0.5, 0, 1, -8)},
-              Enum.EasingStyle.Back, Enum.EasingDirection.Out)
-        mcToggle.Text = "CLOSE"
-    else
-        tween(palettePanel, 0.35, {Position = UDim2.new(0.5, 0, 1, 130)},
-              Enum.EasingStyle.Quint, Enum.EasingDirection.In)
-        mcToggle.Text = "OPEN"
+    if mcBtn then
+        mcBtn.MouseEnter:Connect(function()
+            tween(mcBtn, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
+        end)
+        mcBtn.MouseLeave:Connect(function()
+            tween(mcBtn, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
+        end)
+        mcBtn.MouseButton1Click:Connect(function() togglePalette() end)
     end
 end
-
-mcToggle.MouseEnter:Connect(function()
-    tween(mcToggle, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
-end)
-mcToggle.MouseLeave:Connect(function()
-    tween(mcToggle, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
-end)
-mcToggle.MouseButton1Click:Connect(function() togglePalette() end)
 
 ----------------------------------------------------------------
 -- ПРОВЕРКА: УЖЕ СОХРАНЁН ЛИ СКИН ИГРОКА
@@ -3634,9 +4866,10 @@ function attachDragRotate(viewportOrWorldModel, lookAt, refSizeY)
     cam.FieldOfView = 35
 
     -- Distance считаем через FOV чтобы вся модель влезла в кадр с отступом сверху.
-    local refSize  = math.min(refSizeY, 5.5)
+    -- refSizeY больше не клампится — R15 персонажи выше R6, обрезка искажала кадр.
+    local refSize  = math.max(refSizeY or 5, 4)
     local fovRad   = math.rad(cam.FieldOfView)
-    local distance = math.max((refSize * 0.55) / math.tan(fovRad / 2), 3.5)
+    local distance = math.max((refSize * 0.62) / math.tan(fovRad / 2), 3.5)
     -- Поднимаем точку прицеливания выше — модель смещается вниз в кадре,
     -- голова получает воздух сверху (особенно если шапка/волосы).
     local aim = lookAt + Vector3.new(0, refSize * 0.18, 0)
@@ -3714,15 +4947,117 @@ function attachDragRotate(viewportOrWorldModel, lookAt, refSizeY)
     uiConnections[viewport] = {move = moveConn, endConn = endConn}
 end
 
-function buildViewportFromCharacter(viewport, charSource)
+-- R15-специфичный рендер. R15 сложнее R6:
+--   • Body-parts имеют индивидуальный Size (влияет BodyDepth/Width/Height/HeadScale в Humanoid)
+--   • Аксессуары привязаны через Attachment с именами (HatAttachment, HairAttachment, FaceFrontAttachment)
+--   • FaceControls (моргание глаз, эмоции) — отдельный Instance у Head
+--   • Layered Clothing использует WrapLayer/WrapDeformer
+--   • Motor6D.C0 зашиты пропорции — жёстко переписывать нельзя
+-- Стратегия: клонируем как есть, НИЧЕГО не трогаем в Humanoid (иначе Roblox пересчитает
+-- scales), только анкерим Part'ы и рендерим фиксированным FOV.
+function buildViewportFromCharacterR15(viewport, charSource)
     if not charSource then return false end
     local rendered = false
     local ok, err = pcall(function()
         local clone = charSource:Clone()
         if not clone then return end
-        -- Убираем скрипты, Animator и все AnimationTrack sources, чтобы snapshot не прыгал/не танцевал в ViewportFrame
+
+        -- Убираем только источники анимации. Humanoid НЕ трогаем — иначе Roblox
+        -- сбросит BodyScales к дефолту при потере state machine.
         for _, obj in ipairs(clone:GetDescendants()) do
-            if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript") or obj:IsA("Animator") or obj:IsA("AnimationController") or obj:IsA("Animation") then
+            if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")
+               or obj:IsA("Animator") or obj:IsA("AnimationController") or obj:IsA("Animation") then
+                pcall(function() obj:Destroy() end)
+            end
+        end
+
+        local hum = clone:FindFirstChildOfClass("Humanoid")
+        if hum then
+            -- Минимум: только UI-визуал (не задевает scales)
+            pcall(function()
+                hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
+                hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
+            end)
+        end
+
+        local hrp = clone:FindFirstChild("HumanoidRootPart")
+        if not hrp then clone:Destroy(); return end
+        if not clone.PrimaryPart then clone.PrimaryPart = hrp end
+
+        -- Анкерим всё в текущей позе (заморозка)
+        for _, p in ipairs(clone:GetDescendants()) do
+            if p:IsA("BasePart") then
+                p.Anchored = true
+                p.CanCollide = false
+                p.Massless = true
+            end
+        end
+
+        -- WorldModel
+        local worldModel
+        if viewport:IsA("WorldModel") then
+            worldModel = viewport
+        else
+            worldModel = viewport:FindFirstChildOfClass("WorldModel")
+            if not worldModel then
+                worldModel = Instance.new("WorldModel")
+                worldModel.Parent = viewport
+            end
+        end
+        for _, c in ipairs(worldModel:GetChildren()) do
+            if c:IsA("Model") then c:Destroy() end
+        end
+
+        clone.Parent = worldModel
+
+        -- Центрируем через CFrame (сохраняет относительные позиции всех частей).
+        pcall(function()
+            local cf, _ = clone:GetBoundingBox()
+            local yaw = 0
+            if hrp then _, yaw = hrp.CFrame:ToOrientation() end
+            local offset = CFrame.Angles(0, -yaw, 0) * CFrame.new(-cf.Position)
+            for _, p in ipairs(clone:GetDescendants()) do
+                if p:IsA("BasePart") then
+                    p.CFrame = offset * p.CFrame
+                end
+            end
+        end)
+
+        -- Полностью фиксированный камера-frame — реальные размеры персонажей ВИДНЫ.
+        -- refY=8 studs достаточно для R15 baseline (~6 studs) + запас.
+        -- aimY=0 фиксированный (мы уже центрировали bounding box в 0,0,0) → камера смотрит
+        -- на одну и ту же точку для всех, отличия в scale видны как отличия в кадре.
+        -- Маленький игрок (scale 0.7) → займёт 70% рамки; большой (1.3) → 130% (выйдет за края).
+        local refY = 8
+        local aimY = 0
+        attachDragRotate(worldModel, Vector3.new(0, aimY, 0), refY)
+        rendered = true
+    end)
+    if not ok then return false end
+    return rendered
+end
+
+function buildViewportFromCharacter(viewport, charSource)
+    if not charSource then return false end
+    local rendered = false
+    local ok, err = pcall(function()
+        -- Копируем HumanoidDescription с ОРИГИНАЛА до клонирования — часть R15 body-мешей
+        -- зашита в Description, а не в Instance-детях; без ApplyDescription торс становится "квадратным".
+        local origHum = charSource:FindFirstChildOfClass("Humanoid")
+        local origDesc
+        pcall(function()
+            if origHum then origDesc = origHum:GetAppliedDescription() end
+        end)
+        local isR15 = charSource:FindFirstChild("UpperTorso") ~= nil
+
+        local clone = charSource:Clone()
+        if not clone then return end
+        -- Убираем скрипты и animation sources, чтобы snapshot не танцевал.
+        -- Animator оставляем для R15 (нужен для Humanoid rig setup), убьём его после сброса позы.
+        for _, obj in ipairs(clone:GetDescendants()) do
+            if obj:IsA("Script") or obj:IsA("LocalScript") or obj:IsA("ModuleScript")
+               or obj:IsA("Animation")
+               or (obj:IsA("AnimationController") and not isR15) then
                 obj:Destroy()
             end
         end
@@ -3732,8 +5067,11 @@ function buildViewportFromCharacter(viewport, charSource)
                 hum.DisplayDistanceType = Enum.HumanoidDisplayDistanceType.None
                 hum.HealthDisplayType = Enum.HumanoidHealthDisplayType.AlwaysOff
                 hum.AutoRotate = false
-                hum.PlatformStand = true
+                -- PlatformStand = true ломает R15 позу; используем WalkSpeed=0 + BreakJointsOnDeath=false
+                hum.WalkSpeed = 0
+                hum.JumpPower = 0
                 hum.Sit = false
+                hum.BreakJointsOnDeath = false
             end)
             pcall(function()
                 for _, track in ipairs(hum:GetPlayingAnimationTracks()) do
@@ -3741,55 +5079,45 @@ function buildViewportFromCharacter(viewport, charSource)
                     track:Destroy()
                 end
             end)
+            -- Применяем HumanoidDescription на клон — восстанавливает форму body-parts (torso, arms, legs).
+            -- Без этого R15 клон рендерится с дефолтными block-мешами → "квадратный торс".
+            if origDesc then
+                pcall(function() hum:ApplyDescription(origDesc) end)
+            end
         end
         local hrp = clone:FindFirstChild("HumanoidRootPart")
         if not hrp then clone:Destroy(); return end
         if not clone.PrimaryPart then clone.PrimaryPart = hrp end
 
-        -- Сбрасываем Motor6D/Transform в дефолтную стойку (руки по швам), убирая текущую позу танца/прыжка
+        -- Сброс позы: Transform=identity сбрасывает анимационную дельту.
+        -- Для R15 НЕ трогаем C0 — они зависят от BodyScales и хардкод их ломает
+        -- (перекос суставов → аксессуары привязаны к неправильным точкам → "гигантские кепки").
         for _, part in ipairs(clone:GetDescendants()) do
             if part:IsA("Motor6D") then
                 pcall(function() part.Transform = CFrame.new() end)
-                local part0 = part.Part0
-                local part1 = part.Part1
-                if part0 and part1 then
-                    -- Проверяем тип персонажа (R6 или R15)
-                    local isR15 = clone:FindFirstChild("UpperTorso") ~= nil
-                    if isR15 then
-                        -- R15 дефолтные значения
-                        if part.Name == "Neck" then
-                            part.C0 = CFrame.new(0, 1, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0)
-                            part.C1 = CFrame.new(0, -0.5, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0)
-                        elseif part.Name == "RootJoint" then
-                            part.C0 = CFrame.new(0, 0, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0)
-                            part.C1 = CFrame.new(0, 0, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0)
-                        elseif part.Name == "LeftShoulder" then
-                            part.C0 = CFrame.new(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0)
-                            part.C1 = CFrame.new(0.5, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0)
-                        elseif part.Name == "RightShoulder" then
-                            part.C0 = CFrame.new(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, -0, -0)
-                            part.C1 = CFrame.new(-0.5, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, -0, -0)
-                        elseif part.Name == "LeftElbow" then
-                            part.C0 = CFrame.new(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
-                            part.C1 = CFrame.new(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
-                        elseif part.Name == "RightElbow" then
-                            part.C0 = CFrame.new(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
-                            part.C1 = CFrame.new(0, 0, 0, 1, 0, 0, 0, 1, 0, 0, 0, 1)
-                        end
-                    else
-                        -- R6 дефолтные значения
-                        if part.Name == "Neck" then
-                            part.C0 = CFrame.new(0, 1, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0)
-                        elseif part.Name == "RootJoint" then
-                            part.C0 = CFrame.new(0, 0, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0)
-                        elseif part.Name == "Left Shoulder" then
-                            part.C0 = CFrame.new(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0)
-                        elseif part.Name == "Right Shoulder" then
-                            part.C0 = CFrame.new(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, -0, -0)
-                        end
+                if not isR15 then
+                    -- R6: hard-coded defaults допустимы (пропорции фиксированные)
+                    if part.Name == "Neck" then
+                        pcall(function() part.C0 = CFrame.new(0, 1, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0) end)
+                    elseif part.Name == "RootJoint" then
+                        pcall(function() part.C0 = CFrame.new(0, 0, 0, -1, -0, -0, 0, 0, -0, 0, 1, 0) end)
+                    elseif part.Name == "Left Shoulder" then
+                        pcall(function() part.C0 = CFrame.new(-1, 0.5, 0, 0, 0, -1, 0, 1, 0, 1, 0, 0) end)
+                    elseif part.Name == "Right Shoulder" then
+                        pcall(function() part.C0 = CFrame.new(1, 0.5, 0, 0, 0, 1, 0, 1, 0, -1, -0, -0) end)
                     end
                 end
             end
+        end
+        -- После сброса позы можно убить Animator (иначе будет дёргать Transform обратно)
+        if isR15 then
+            pcall(function()
+                for _, obj in ipairs(clone:GetDescendants()) do
+                    if obj:IsA("Animator") or obj:IsA("AnimationController") then
+                        obj:Destroy()
+                    end
+                end
+            end)
         end
 
         -- Сохраняем аксессуары с их Attachments (не удаляем Welds)
@@ -3828,6 +5156,11 @@ function buildViewportFromCharacter(viewport, charSource)
         end
 
         clone.Parent = worldModel
+        -- Для R15 ApplyDescription асинхронно re-welds accessories и body-parts.
+        -- Даём кадр обработать, иначе PivotTo сбивает промежуточные welds → плавающие/огромные аксессуары.
+        if isR15 then
+            pcall(function() task.wait() end)
+        end
         pcall(function()
             clone:PivotTo(CFrame.new(0, 0, 0))
             local pp = clone.PrimaryPart or clone:FindFirstChild("HumanoidRootPart") or clone:FindFirstChild("Head")
@@ -3845,7 +5178,15 @@ function buildViewportFromCharacter(viewport, charSource)
                 p.CanCollide = false
             end
         end
-        attachDragRotate(worldModel, Vector3.new(0, 0, 0), 5)
+        -- Считаем реальный bounding box (для R15 модели крупнее R6, а с шапками ещё больше).
+        -- Раньше был жёстко 5 → R15 с волосами вылезал/сдвигался.
+        local refY, aimY = 5, 0
+        pcall(function()
+            local cf, size = clone:GetBoundingBox()
+            refY = math.max(size.Y, 4)
+            aimY = cf.Position.Y
+        end)
+        attachDragRotate(worldModel, Vector3.new(0, aimY, 0), refY)
         rendered = true
     end)
     if not ok then end
@@ -3876,7 +5217,13 @@ function buildViewportFromSkinModel(viewport, model)
             end
         end)
         model.Parent = worldModel
-        attachDragRotate(worldModel, Vector3.new(0, 0.8, 0), 5)
+        local refY, aimY = 5, 0.8
+        pcall(function()
+            local cf, size = model:GetBoundingBox()
+            refY = math.max(size.Y, 4)
+            aimY = cf.Position.Y
+        end)
+        attachDragRotate(worldModel, Vector3.new(0, aimY, 0), refY)
         rendered = true
     end)
     if not ok then end
@@ -3944,9 +5291,11 @@ function createPlayerCard(targetPlayer, layoutOrder)
     local light = Instance.new("PointLight")
     light.Brightness = 2; light.Range = 20; light.Parent = cam
 
-    -- Player cards: mannequin-based approach (same as saved skins) = static T-pose.
-    -- buildViewportFromCharacter clones the live character WITH current animation pose.
-    -- buildSkinModel creates a fresh static mannequin instead, just like saved skins.
+    -- Player cards.
+    -- R15: используем rbxthumb Avatar image — Roblox рендерит полное тело с правильным
+    -- HumanoidDescription (пропорции, аксессуары, форма торса) на своей стороне,
+    -- любой viewport-клон в WorldModel даёт "квадратные" R15 из-за неактивного Humanoid state machine.
+    -- R6: клонируем персонажа в ViewportFrame — mannequin-based static T-pose.
     local viewportOk = false
     local charSource
     if targetPlayer == player then
@@ -3954,23 +5303,43 @@ function createPlayerCard(targetPlayer, layoutOrder)
     else
         charSource = targetPlayer.Character
     end
-    if charSource then
-        local snapshot = captureSkinSnapshot(targetPlayer)
-        if snapshot then
-            local okBuild, builtModel = pcall(buildSkinModel, snapshot)
-            if okBuild and builtModel then
-                viewportOk = buildViewportFromSkinModel(viewport, builtModel)
-                if not viewportOk then pcall(function() builtModel:Destroy() end) end
+
+    local function detectRig(ch)
+        if not ch then return "R6" end
+        local h = ch:FindFirstChildOfClass("Humanoid")
+        if h and h.RigType == Enum.HumanoidRigType.R15 then return "R15" end
+        if ch:FindFirstChild("UpperTorso") then return "R15" end
+        return "R6"
+    end
+    local rig = detectRig(charSource)
+
+    if rig == "R15" and charSource then
+        -- R15: минимально-инвазивный клон — freeze текущей позы без переписывания Motor6D.
+        -- Rbxthumb показывает Roblox-профиль (не in-game scale), viewport-снапшот с ResetC0 ломает пропорции.
+        viewportOk = buildViewportFromCharacterR15(viewport, charSource)
+        if not viewportOk then
+            pcall(function() viewport:Destroy() end)
+            makeAvatarFallback(card, targetPlayer.UserId)
+        end
+    else
+        -- R6 → mannequin-based viewport
+        if charSource then
+            local snapshot = captureSkinSnapshot(targetPlayer)
+            if snapshot then
+                local okBuild, builtModel = pcall(buildSkinModel, snapshot)
+                if okBuild and builtModel then
+                    viewportOk = buildViewportFromSkinModel(viewport, builtModel)
+                    if not viewportOk then pcall(function() builtModel:Destroy() end) end
+                end
             end
         end
-    end
-    -- Fallback: direct character clone if mannequin build failed
-    if not viewportOk and charSource then
-        viewportOk = buildViewportFromCharacter(viewport, charSource)
-    end
-    if not viewportOk then
-        viewport:Destroy()
-        makeAvatarFallback(card, targetPlayer.UserId)
+        if not viewportOk and charSource then
+            viewportOk = buildViewportFromCharacter(viewport, charSource)
+        end
+        if not viewportOk then
+            pcall(function() viewport:Destroy() end)
+            makeAvatarFallback(card, targetPlayer.UserId)
+        end
     end
 
     local nameLabel = Instance.new("TextLabel")
@@ -4372,11 +5741,7 @@ function updateSavedSkinsList()
     for _, ch in ipairs(savedContainer:GetChildren()) do
         if ch:IsA("Frame") then ch:Destroy() end
     end
-    for i, skin in ipairs(savedSkins) do
-        local c = createSavedCard(skin, i)
-        c.Parent = savedContainer
-    end
-    -- empty state когда saved открыт и список пуст
+    -- empty state сразу (не ждём построения карточек)
     if currentPage == "saved" then
         local hasAny = #savedSkins > 0
         savedContainer.Visible = hasAny
@@ -4384,6 +5749,23 @@ function updateSavedSkinsList()
     else
         savedEmpty.Visible = false
     end
+    -- ЛАГИ: buildSkinModel в createSavedCard тяжёлый (манекен+меши+viewport).
+    -- Строим по одной карточке за кадр — интерфейс не фризит.
+    local myRunToken = (savedContainer:GetAttribute("__buildToken") or 0) + 1
+    savedContainer:SetAttribute("__buildToken", myRunToken)
+    task.spawn(function()
+        for i, skin in ipairs(savedSkins) do
+            -- Если список успели обновить снова — прекращаем прошлое построение.
+            if savedContainer:GetAttribute("__buildToken") ~= myRunToken then return end
+            if not savedContainer.Parent then return end
+            local ok, c = pcall(createSavedCard, skin, i)
+            if ok and c then
+                c.Parent = savedContainer
+            end
+            -- Yield каждые 3 карточки — держим 60fps даже с 100+ слотами.
+            if i % 3 == 0 then task.wait() end
+        end
+    end)
 end
 
 ----------------------------------------------------------------
@@ -4397,6 +5779,7 @@ local pageMeta = {
         return string.format("%d  SLOTS", #savedSkins)
     end},
     settings  = {title = "SETTINGS  ·  PREFERENCES", info = function() return "PERSONALIZE" end},
+    menu      = {title = "MENU  ·  QUICK ACTIONS",  info = function() return "TOOLS" end},
 }
 
 function moveIndicatorTo(page, animated)
@@ -4427,8 +5810,10 @@ function switchPage(page)
     savedContainer.Visible    = (page == "saved" and #savedSkins > 0)
     savedEmpty.Visible        = (page == "saved" and #savedSkins == 0)
     settingsPage.Visible      = (page == "settings")
+    local mp = pagesArea:FindFirstChild("MenuPage")
+    if mp then mp.Visible = (page == "menu") end
 
-    if page ~= "settings" and paletteOpen then togglePalette(false) end
+    if page ~= "settings" and togglePalette then pcall(togglePalette, false) end
 
     if page == "players" then updatePlayersList()
     elseif page == "saved" then updateSavedSkinsList()
@@ -4450,6 +5835,9 @@ end
 playersBtn.MouseButton1Click  :Connect(function() switchPage("players")   end)
 savedBtn.MouseButton1Click    :Connect(function() switchPage("saved")     end)
 settingsBtn.MouseButton1Click :Connect(function() switchPage("settings")  end)
+if navButtons["menu"] then
+    navButtons["menu"].MouseButton1Click:Connect(function() switchPage("menu") end)
+end
 
 for p, b in pairs(navButtons) do
     b.MouseEnter:Connect(function()
@@ -4644,6 +6032,22 @@ function g_putOnGlasses()
     if not g_rightShoulder or not g_rigType then
         return
     end
+    -- Проверяем что Motor6D.C0 записываем (в некоторых играх сервер блокирует Joint).
+    -- Если заблокирован — пропускаем анимацию и просто цепляем очки на голову.
+    local c0Writable = true
+    do
+        local ok = pcall(function()
+            local cur = g_rightShoulder.C0
+            g_rightShoulder.C0 = cur
+        end)
+        if not ok then c0Writable = false end
+    end
+    if not c0Writable then
+        pcall(function() scSetGlassesState("open") end)
+        g_glassesOpen = true
+        pcall(function() if g_attachToHead then g_attachToHead() end end)
+        return
+    end
     g_isAnimating = true
     -- Save glasses state
     pcall(function() scSetGlassesState("open") end)
@@ -4766,6 +6170,21 @@ end
 function g_takeOffGlasses()
     if g_isAnimating or not g_glassesOpen then return end
     if not g_rightShoulder then return end
+    -- C0 read-only guard (сервер блокирует Motor6D): пропускаем анимацию, снимаем очки
+    local c0Writable = true
+    do
+        local ok = pcall(function()
+            local cur = g_rightShoulder.C0
+            g_rightShoulder.C0 = cur
+        end)
+        if not ok then c0Writable = false end
+    end
+    if not c0Writable then
+        pcall(function() scSetGlassesState("closed") end)
+        g_glassesOpen = false
+        if g_glasses then pcall(function() g_glasses:Destroy() end); g_glasses = nil end
+        return
+    end
     g_isAnimating = true
     -- Save glasses state
     pcall(function() scSetGlassesState("closed") end)
@@ -4959,7 +6378,7 @@ function closeMenu()
         end)
         savedWasFirstPerson = false
     end
-    if paletteOpen then togglePalette(false) end
+    if togglePalette then pcall(togglePalette, false) end
     tween(backdrop, 0.25, {BackgroundTransparency = 1})
     tween(mainContainer, 0.3,
         {Size = UDim2.fromOffset(W * 0.5, H * 0.35), BackgroundTransparency = 1},
@@ -4982,7 +6401,19 @@ function toggleMenu()
     if menuVisible then closeMenu() else openMenu() end
 end
 
-closeButton.MouseButton1Click:Connect(closeMenu)
+closeButton.MouseButton1Click:Connect(function()
+    pcall(closeMenu)
+end)
+-- Дублирующий bind: некоторые игры блокируют MouseButton1Click hook'ами.
+closeButton.Activated:Connect(function()
+    pcall(closeMenu)
+end)
+closeButton.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1
+       or input.UserInputType == Enum.UserInputType.Touch then
+        pcall(closeMenu)
+    end
+end)
 
 ----------------------------------------------------------------
 -- HEAD ICON (плавающая аватарка над головой + click toggle)
@@ -5160,12 +6591,28 @@ end)
 headIconBtn.MouseLeave:Connect(function()
     tween(headIcon, 0.15, {Size = UDim2.fromOffset(44, 44), BackgroundTransparency = 0.15})
 end)
--- headIconBtn.MouseButton1Click:Connect(function() toggleMenu() end)  -- Removed - circle button no longer opens menu
+-- В Light Menu клик по круглой иконке открывает/закрывает Skin Changer.
+if lightMenu then
+    headIconBtn.MouseButton1Click:Connect(function()
+        if scriptDisabled then return end
+        if toggleMenu then pcall(toggleMenu) end
+    end)
+end
 
 local headIconUserHidden = false
 
 function updateHeadIconPosition()
-    if headIconUserHidden or not g_glassesOpen then
+    -- В Light Menu иконка всегда видна (не привязана к очкам).
+    -- HIDE ICON тумблер: полностью скрывает HeadIcon.
+    if _G.__SC_hideIcon then
+        headIcon.Visible = false
+        return
+    end
+    if headIconUserHidden then
+        headIcon.Visible = false
+        return
+    end
+    if not lightMenu and not g_glassesOpen then
         headIcon.Visible = false
         return
     end
@@ -5203,10 +6650,20 @@ end
 -- END:    скрыть/показать HeadIcon (меню НЕ закрывается).
 ----------------------------------------------------------------
 UserInputService.InputBegan:Connect(function(input, gameProcessed)
-    if gameProcessed then return end
     if scriptDisabled then return end
 
-    if input.KeyCode == Enum.KeyCode.Insert then
+    local kb = Enum.KeyCode[menuKeybindName] or Enum.KeyCode.Insert
+    if input.KeyCode == kb then
+        -- Наш бинд игнорирует gameProcessed — на R15-серверах игра часто
+        -- перехватывает клавиши через ContextActionService и ставит флаг true,
+        -- из-за чего меню не открывалось.
+        -- LIGHT MENU: бинд открывает/закрывает главное меню напрямую (без очков и 3D-панелей)
+        if lightMenu then
+            if toggleMenu then pcall(toggleMenu) end
+            return
+        end
+        -- В не-Low режиме бинд связан с анимацией очков — тут gameProcessed уважаем
+        if gameProcessed then return end
         if g_isAnimating then return end
         if not g_glassesOpen then
             -- Очков нет → анимация надевания + показ панелей
@@ -5233,6 +6690,46 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
             if hideGlassesWorldMenus then hideGlassesWorldMenus() end
             task.spawn(function() g_takeOffGlasses() end)
         end
+    end
+end)
+
+-- Дублирующий bind через ContextActionService с высоким приоритетом.
+-- InputBegan может не сработать если игра забиндила клавишу через ContextAction'ом
+-- с флагом Sink. Регистрация через CAS с приоритетом MAX = 2000 перебивает.
+local function reRegisterMenuBind()
+    pcall(function()
+        ContextActionService:UnbindAction("__SC_ToggleMenu")
+    end)
+    pcall(function()
+        local kb = Enum.KeyCode[menuKeybindName] or Enum.KeyCode.Insert
+        ContextActionService:BindActionAtPriority(
+            "__SC_ToggleMenu",
+            function(_, inputState)
+                if inputState ~= Enum.UserInputState.Begin then return Enum.ContextActionResult.Pass end
+                if scriptDisabled then return Enum.ContextActionResult.Pass end
+                if lightMenu then
+                    if toggleMenu then pcall(toggleMenu) end
+                    return Enum.ContextActionResult.Sink
+                end
+                return Enum.ContextActionResult.Pass  -- в обычном режиме отдаём обработку InputBegan (glasses logic)
+            end,
+            false,       -- create touch button
+            2000,        -- priority (max)
+            kb
+        )
+    end)
+end
+reRegisterMenuBind()
+
+-- Пере-регистрация при смене бинда в Settings
+task.spawn(function()
+    local last = menuKeybindName
+    while not scriptDisabled do
+        if menuKeybindName ~= last then
+            last = menuKeybindName
+            reRegisterMenuBind()
+        end
+        task.wait(0.5)
     end
 end)
 
@@ -5272,11 +6769,117 @@ scriptConnections.charAdded2 = player.CharacterAdded:Connect(function(newChar)
 
     if savedSkinData then
         task.spawn(function()
-            local rootPart = newChar:WaitForChild("HumanoidRootPart", 5)
-            if not rootPart or scriptDisabled then return end
-            task.wait(1.5)
+            local hum = newChar:WaitForChild("Humanoid", 30)
+            if not hum or scriptDisabled then return end
             if player.Character ~= newChar or scriptDisabled then return end
-            pcall(function() applySavedSkin(savedSkinData) end)
+
+            -- Даём игре 2 секунды закончить свой respawn (иногда сервер сам re-applies default skin)
+            task.wait(2)
+            if player.Character ~= newChar or scriptDisabled then return end
+
+            -- ШАГ 1: Полностью стираем персонажа до пустого (без базового скина)
+            -- Применяем ПУСТОЙ HumanoidDescription — Roblox снимет все аксессуары, обнулит меши,
+            -- сбросит одежду. Это правильный способ "reset skin to empty character".
+            pcall(function()
+                local emptyDesc = Instance.new("HumanoidDescription")
+                -- Всё оставим по умолчанию (пустые id) → чистый R15 без наворотов
+                hum:ApplyDescription(emptyDesc)
+            end)
+            task.wait(0.3)
+
+            -- ШАГ 2: Дополнительно вычищаем любые Accessory/Shirt/Pants/CharacterMesh/ACC_
+            -- которые сервер мог быстро вернуть после нашего reset
+            for _, c in ipairs(newChar:GetChildren()) do
+                if c:IsA("Accessory") or c:IsA("Shirt") or c:IsA("Pants")
+                   or c:IsA("ShirtGraphic") or c:IsA("CharacterMesh")
+                   or (c:IsA("BasePart") and c.Name:sub(1,4) == "ACC_") then
+                    pcall(function() c:Destroy() end)
+                end
+            end
+            task.wait(0.2)
+
+            -- ШАГ 3: Применяем целевой скин на теперь-пустой персонаж
+            for i = 1, 5 do
+                local ok = pcall(applySavedSkin, savedSkinData)
+                if ok then break end
+                task.wait(1)
+            end
+
+            -- ШАГ 4: Через 1 сек проверяем что базовые аксессуары не вернулись — если сервер
+            -- их re-injects, ещё раз применяем целевой desc.
+            -- ВАЖНО: ApplyDescription async создаёт дефолтную face-decal (классическую улыбку),
+            -- которая накладывается ПОВЕРХ кастомного лица. Поэтому после каждого повторного
+            -- ApplyDescription принудительно восстанавливаем правильное лицо.
+            task.wait(1)
+            if savedSkinData and (savedSkinData.humanoidDescription or savedSkinData.r15DescFields) then
+                pcall(function()
+                    local desc
+                    if savedSkinData.humanoidDescription then
+                        desc = savedSkinData.humanoidDescription
+                    elseif savedSkinData.r15DescFields then
+                        desc = Instance.new("HumanoidDescription")
+                        for k, v in pairs(savedSkinData.r15DescFields) do
+                            if type(v) == "table" and v.__color then
+                                pcall(function() desc[k] = Color3.new(v.r, v.g, v.b) end)
+                            else
+                                pcall(function() desc[k] = v end)
+                            end
+                        end
+                    end
+                    if desc then hum:ApplyDescription(desc) end
+                end)
+            end
+
+            -- ФИНАЛЬНАЯ ФИКСАЦИЯ ЛИЦА (после всех ApplyDescription):
+            -- watcher на 5+ секунд, который непрерывно сносит лишние face-decals
+            -- и держит правильную. Это ловит async вставки Roblox в любое время.
+            local targetFace = savedSkinData and savedSkinData.face
+            local function faceStep()
+                pcall(function()
+                    local ch = player.Character
+                    if not ch then return end
+                    local h = ch:FindFirstChild("Head")
+                    if not h then return end
+                    local wantCustom = targetFace and targetFace ~= ""
+                    local kept = false
+                    for _, child in ipairs(h:GetChildren()) do
+                        if child:IsA("Decal") and child.Name == "face" then
+                            if wantCustom and not kept and child.Texture == targetFace then
+                                kept = true
+                            else
+                                child:Destroy()
+                            end
+                        end
+                    end
+                    if h:IsA("MeshPart") then h.TextureID = "" end
+                    local sm = h:FindFirstChildOfClass("SpecialMesh")
+                    if sm then sm.TextureId = "" end
+                    if wantCustom and not kept then
+                        local nf = Instance.new("Decal")
+                        nf.Name = "face"; nf.Face = Enum.NormalId.Front
+                        nf.Texture = targetFace
+                        nf.Parent = h
+                    end
+                end)
+            end
+            faceStep()
+            -- Снимаем watcher от прошлого apply / прошлого респавна если он ещё жив.
+            if _G._SC_faceWatcherConn then
+                pcall(function() _G._SC_faceWatcherConn:Disconnect() end)
+                _G._SC_faceWatcherConn = nil
+            end
+            local startT = tick()
+            local conn
+            conn = game:GetService("RunService").Heartbeat:Connect(function()
+                -- Если другой apply-путь установил свой watcher — этот прекращает работу.
+                if _G._SC_faceWatcherConn ~= conn or tick() - startT > 6 then
+                    if conn then conn:Disconnect(); conn = nil end
+                    if _G._SC_faceWatcherConn == conn then _G._SC_faceWatcherConn = nil end
+                    return
+                end
+                faceStep()
+            end)
+            _G._SC_faceWatcherConn = conn
         end)
     end
 end)
@@ -5467,17 +7070,29 @@ function invGetAnimIdFromScript(animate, folderName, fallbackId)
 end
 
 function invCleanup()
+    -- CRITICAL: mark inactive FIRST. Otherwise the "unsit protection" task.defer
+    -- queued from activation's Sit-changed connection can fire AFTER we disconnect
+    -- conns and RE-SIT us (checks inv_isActive to decide). Setting it here first
+    -- makes those pending defers bail out.
+    inv_isActive = false
+
+    pcall(function() ContextActionService:UnbindAction("InvBlockJump") end)
+
     for i = #inv_conns, 1, -1 do
         pcall(function() inv_conns[i]:Disconnect() end)
         inv_conns[i] = nil
     end
-    pcall(function() ContextActionService:UnbindAction("InvBlockJump") end)
 
+    -- Stop OUR custom tracks (walk/jump/fall) locally.
     pcall(function() if inv_walkTrack then inv_walkTrack:Stop(0); inv_walkTrack:Destroy() end end)
     pcall(function() if inv_jumpTrack then inv_jumpTrack:Stop(0); inv_jumpTrack:Destroy() end end)
     pcall(function() if inv_fallTrack then inv_fallTrack:Stop(0); inv_fallTrack:Destroy() end end)
     inv_walkTrack, inv_jumpTrack, inv_fallTrack = nil, nil, nil
 
+    -- Restore original sit animation IDs on the Animate folder BEFORE
+    -- we un-sit — so if Animate briefly re-triggers sit, it plays the
+    -- real sit clip (which will immediately be stopped), not the idle
+    -- swap that made the "half-seated" pose linger.
     for animObj, origId in pairs(inv_savedSitAnims) do
         pcall(function() animObj.AnimationId = origId end)
     end
@@ -5487,116 +7102,88 @@ function invCleanup()
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 
-    local s = inv_driveSeat
-    inv_driveSeat = nil
-    if s and s.Parent then
-        local w = s:FindFirstChild("SeatWeld")
-        if w then pcall(function() w:Destroy() end) end
-        pcall(function() s:Destroy() end)
+    -- STEP 1: DISABLE the Seated humanoid state entirely. The engine
+    -- immediately kicks the humanoid out of Seated and refuses to enter
+    -- it again while disabled — this replicates to server + all clients
+    -- and is the ONLY method that guarantees the sit pose is dropped
+    -- for every observer, without touching the Animator or Animate script.
+    if hum then
+        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false) end)
+        pcall(function() hum.PlatformStand = false end)
+        pcall(function() hum.Sit = false end)
     end
 
-    if char then
-        -- STEP 1: Kill Animate first so it doesn't fight the state transitions
-        -- (Animate re-evaluates on every hum.Changed and will replay sit if Seated).
+    -- STEP 2: Destroy seat + weld.
+    local seat = inv_driveSeat
+    inv_driveSeat = nil
+    if seat and seat.Parent then
+        local w = seat:FindFirstChild("SeatWeld")
+        if w then pcall(function() w:Destroy() end) end
+        pcall(function() seat:Destroy() end)
+    end
+
+    if char and hum then
+        workspace.CurrentCamera.CameraSubject = hum
+
+        -- STEP 3: Canonical exit from Seated. Replicates to server.
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
+        pcall(function() hum.Jump = true end)
+
+        -- STEP 4: Stop any lingering sit-name tracks on the Animator.
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if not animator then
+            animator = Instance.new("Animator")
+            animator.Parent = hum
+        end
+        for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
+            local nm = ""
+            pcall(function() nm = tr.Name or (tr.Animation and tr.Animation.Name) or "" end)
+            if nm == "SitAnim" or nm:lower():find("sit") then
+                pcall(function() tr:Stop(0) end)
+            end
+        end
+
+        -- STEP 5: VISUAL OVERRIDE — this is the actual fix for the
+        -- "other players see me sitting" problem. Even after Sit=false,
+        -- Jump, and SetStateEnabled, a lingering sit-pose animation
+        -- track can remain queued on the Animator's replication buffer
+        -- (we cannot un-send it, only override it). We load and play
+        -- the game's own idle animation at Action4 priority — the
+        -- highest priority — so it visually overrides ANY leftover
+        -- sit pose on every observing client. Then we stop it after
+        -- ~1s so Animate LocalScript resumes normal control.
         local animate = char:FindFirstChild("Animate")
-        if animate and animate:IsA("LocalScript") then
-            animate.Disabled = true
-        end
+        local idleId = invGetAnimIdFromScript(animate, "idle", "rbxassetid://507766388")
 
-        if hum then
-            -- STEP 2: Stop every currently playing track on the animator.
-            -- This kills the replicated sit-pose on OTHER clients immediately
-            -- (Animator tracks replicate to all clients, so stopping them here
-            -- stops what other players actually see).
-            local animator = hum:FindFirstChildOfClass("Animator")
-            if animator then
-                for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
-                    pcall(function() tr:Stop(0) end)
-                end
+        local overrideTrack = nil
+        pcall(function()
+            local a = Instance.new("Animation")
+            a.AnimationId = idleId
+            overrideTrack = animator:LoadAnimation(a)
+            if overrideTrack then
+                overrideTrack.Priority = Enum.AnimationPriority.Action4
+                overrideTrack.Looped = true
+                overrideTrack:Play(0.1)
             end
+        end)
 
-            -- STEP 3: Hard-reset humanoid via PlatformStand toggle.
-            -- Setting PlatformStand=true forcibly detaches the humanoid from any
-            -- seat/weld and REPLICATES a physics-state change. Setting it back
-            -- to false restarts normal humanoid physics. This is the classic
-            -- fix for "stuck sitting" ghost poses on other clients.
-            pcall(function() hum.PlatformStand = true end)
-            pcall(function() hum.Sit = false end)
-
-            workspace.CurrentCamera.CameraSubject = hum
-        end
-
-        -- STEP 4: Physically lift HRP off any residual seat surface + zero
-        -- velocity. Small upward push makes sure we're not resting on a chair.
-        if hrp then
+        task.delay(1.0, function()
             pcall(function()
-                hrp.CFrame = hrp.CFrame + Vector3.new(0, 2, 0)
-                hrp.AssemblyLinearVelocity  = Vector3.new(0, 0, 0)
-                hrp.AssemblyAngularVelocity = Vector3.zero
-            end)
-        end
-
-        -- STEP 5: Drop PlatformStand, force a REAL jump (hum.Jump = true).
-        -- Jump=true triggers the server's jump handler which naturally exits
-        -- the Seated state and replicates Jumping→Freefall→Landed→Running
-        -- to every other client. This is what actually clears the sit pose.
-        task.delay(0.08, function()
-            if not hum or not hum.Parent then return end
-            pcall(function() hum.PlatformStand = false end)
-            pcall(function() hum.Sit = false end)
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.Jumping) end)
-            pcall(function() hum.Jump = true end)
-            local ch = hum.Parent
-            local ch_hrp = ch and ch:FindFirstChild("HumanoidRootPart")
-            if ch_hrp then
-                pcall(function()
-                    ch_hrp.AssemblyLinearVelocity = Vector3.new(0, 55, 0)
-                end)
-            end
-        end)
-
-        -- STEP 6: Nudge through GettingUp so Animate (once re-enabled) reads
-        -- a non-Seated state and does NOT play sit again.
-        task.delay(0.22, function()
-            if not hum or not hum.Parent then return end
-            pcall(function() hum.Sit = false end)
-            pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-        end)
-
-        -- STEP 7: Land in Running state and re-enable Animate LAST so it never
-        -- ticks while Sit could still be true.
-        task.delay(0.45, function()
-            if hum and hum.Parent then
-                pcall(function() hum.Sit = false end)
-                pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
-            end
-            local ch = player.Character
-            local a = ch and ch:FindFirstChild("Animate")
-            if a and a:IsA("LocalScript") then
-                a.Disabled = false
-            end
-        end)
-
-        -- STEP 8: Return to original position after everything settles.
-        if hrp and inv_savedCF then
-            task.delay(0.6, function()
-                if hrp and hrp.Parent then
-                    hrp.CFrame = inv_savedCF + CFrame.new(0, 1, 0)
-                    pcall(function()
-                        hrp.AssemblyLinearVelocity  = Vector3.zero
-                        hrp.AssemblyAngularVelocity = Vector3.zero
+                if overrideTrack then
+                    overrideTrack:Stop(0.2)
+                    task.delay(0.3, function()
+                        pcall(function() if overrideTrack then overrideTrack:Destroy() end end)
                     end)
                 end
-                -- Final safety: one more Sit=false + Running poke.
-                if hum and hum.Parent then
-                    pcall(function() hum.Sit = false end)
-                    pcall(function() hum:ChangeState(Enum.HumanoidStateType.Running) end)
-                end
             end)
-        end
+            local ch = player.Character
+            local h  = ch and ch:FindFirstChildOfClass("Humanoid")
+            if h then
+                pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end)
+            end
+        end)
     end
 
-    inv_isActive = false
     inv_velY, inv_currentVelX, inv_currentVelZ = 0, 0, 0
     inv_savedCF = nil
     inv_seatToGround = 0
@@ -5912,6 +7499,7 @@ local specialMenuSG = nil
 local specialMenuSGBack = nil
 local passwordEntered = ""
 local CORRECT_PASSWORD = "password"
+-- (kept local; declared here for scope of password menu)
 local specialMenuAuthenticated = false
 local emptySpecialMenuPart = nil
 local emptySpecialMenuSG = nil
@@ -5968,10 +7556,9 @@ local function spawnModelFromJSON(modelKey, modelName)
     local minX, minY, minZ = math.huge, math.huge, math.huge
     local maxX, maxY, maxZ = -math.huge, -math.huge, -math.huge
 
-    local function extractAssetId(meshIdStr)
-        if not meshIdStr or meshIdStr == "" then return nil end
-        local id = meshIdStr:match("id=(%d+)") or meshIdStr:match("(%d+)")
-        return id
+    local function extractAssetId(s)
+        s = tostring(s or "")
+        return s:match("rbxassetid://(%d+)") or s:match("id=(%d+)") or s:match("asset/%?id=(%d+)") or s:match("(%d%d%d%d+)")
     end
 
     local function processPart(partData, parent)
@@ -7962,6 +9549,7 @@ end
 
 -- ============= СОЗДАНИЕ И УПРАВЛЕНИЕ =============
 function createWorldPanel(angleDeg, phase, contentBuilder, name, sizeStuds, canvasSize)
+    if lightMenu then return end
     do -- block to limit locals scope
     ensureWorldMenuFolder()
     sizeStuds  = sizeStuds  or Vector3.new(6, 4, 0.05)
@@ -8110,6 +9698,7 @@ function captureAnchorForward()
 end
 
 function buildPanels()
+    if lightMenu then return end
     -- Cancel any active flip animation before destroying panels
     if flipAnimationConnection then
         flipAnimationConnection:Disconnect()
@@ -8123,6 +9712,7 @@ function buildPanels()
 end
 
 showGlassesWorldMenus = function()
+    if lightMenu then return end
     if glassesMenuVisible then return end
     glassesMenuVisible = true
     glassesHidden = false
@@ -8478,15 +10068,17 @@ task.spawn(function()
         -- Restore More Skins toggle (Enable = on until user turns it off in the menu)
         if settings.moreSkins == "Enable" then
             moreSkinsEnabled = true
-            if msToggle then
-                pcall(function() msToggle.Text = "ENABLED" end)
-            end
         else
             moreSkinsEnabled = false
-            if msToggle then
-                pcall(function() msToggle.Text = "DISABLED" end)
-            end
         end
+        -- msToggle упрятан в do-блок; ищем его как первый TextButton в MoreSkinsRow
+        pcall(function()
+            local row = settingsPage and settingsPage:FindFirstChild("MoreSkinsRow")
+            if row then
+                local btn = row:FindFirstChildOfClass("TextButton")
+                if btn then btn.Text = moreSkinsEnabled and "ENABLED" or "DISABLED" end
+            end
+        end)
         -- Restore theme
         if settings.themeName then
             for _, t in ipairs(THEMES) do
@@ -8614,9 +10206,9 @@ task.spawn(function()
 
         task.wait(1)
 
-        -- Check glasses state and restore if they were open
+        -- Check glasses state and restore if they were open (в Light Menu не восстанавливаем — очки не нужны)
         local glassesState = (scReadSkinsBundle().glassesState) or "closed"
-        if glassesState == "open" then
+        if not lightMenu and glassesState == "open" then
             local glassesWaitStart = tick()
             while tick() - glassesWaitStart < 5 do
                 if g_putOnGlasses and not g_glassesOpen then
