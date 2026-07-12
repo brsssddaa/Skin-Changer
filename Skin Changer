@@ -2149,7 +2149,8 @@ function applySkin(targetPlayer)
             local tHead = targetChar:FindFirstChild("Head")
             if tHead then
                 local f = tHead:FindFirstChild("face")
-                if f and f.Texture and f.Texture ~= "" then
+                if f and f.Texture and f.Texture ~= ""
+                   and f.Texture ~= "rbxasset://textures/face.png" then
                     savedSkinData.face = f.Texture
                     -- Применяем сразу на локального игрока.
                     -- Сносим ВСЕ существующие "face" decals (может быть несколько
@@ -2223,12 +2224,13 @@ function applySkin(targetPlayer)
     local targetHead = targetChar:FindFirstChild("Head")
     if targetHead then
         local f = targetHead:FindFirstChild("face")
-        if f then
+        if f and f.Texture and f.Texture ~= ""
+           and f.Texture ~= "rbxasset://textures/face.png" then
             savedSkinData.face = f.Texture
         else
-            -- Сентинел "нет лица у target'а" — иначе после респавна ApplyDescription
-            -- восстановит дефолтную улыбку, а applySavedSkin не будет знать что face
-            -- НАДО удалить (nil-ветку он трактует как "нет данных").
+            -- Дефолтная улыбка Roblox или нет лица → сентинел "нет лица".
+            -- На apply applySavedSkin УДАЛИТ дефолтную улыбку, которую
+            -- Roblox добавляет автоматически при ApplyDescription/respawn.
             savedSkinData.face = ""
         end
         local m = targetHead:FindFirstChildOfClass("SpecialMesh")
@@ -2806,7 +2808,15 @@ function captureSkinSnapshot(targetPlayer)
     local tHead = targetChar:FindFirstChild("Head")
     if tHead then
         local f = tHead:FindFirstChild("face")
-        if f then skinData.face = f.Texture end
+        if f and f.Texture and f.Texture ~= ""
+           and f.Texture ~= "rbxasset://textures/face.png" then
+            -- Реальное кастомное лицо
+            skinData.face = f.Texture
+        else
+            -- Либо нет face-декала, либо дефолтная улыбка Roblox — трактуем как "нет лица".
+            -- На apply это уберёт классическую улыбку, добавляемую ApplyDescription.
+            skinData.face = ""
+        end
         local m = tHead:FindFirstChildOfClass("SpecialMesh")
         if m then
             local clone = m:Clone()
