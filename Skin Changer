@@ -415,6 +415,7 @@ function saveSavedSkinsToFile()
             bodyPartSizes  = skinData.bodyPartSizes,
             bodyPartMeshes = skinData.bodyPartMeshes,
             face           = skinData.face,
+            headTexture    = skinData.headTexture,
             headMesh       = nil,
             characterMeshes= {},
             accessories    = {},
@@ -553,6 +554,7 @@ function loadSavedSkinsFromFile()
                 bodyPartSizes   = skinData.bodyPartSizes,
                 bodyPartMeshes  = skinData.bodyPartMeshes,
                 face            = skinData.face,
+                headTexture     = skinData.headTexture,
                 headMesh        = nil,
                 characterMeshes = {},
                 accessories     = {},
@@ -873,54 +875,47 @@ function setupQueueOnTeleport()
     queueOnTeleportConfigured = true
     -- Detect executor and use appropriate path
     local autoexecPath = "SkinChanger/SkinChanger_Autoexec"
-    local cachePath = "SkinChanger/SkinChanger_Main.lua"
     local executorName = detectCurrentExecutor()
     if executorName and executorName:find("xeno") then
         autoexecPath = "../workspace/SkinChanger/SkinChanger_Autoexec"
-        cachePath = "../workspace/SkinChanger/SkinChanger_Main.lua"
     end
 
+    -- Тянем скрипт напрямую с GitHub — не зависим от имени локального .lua файла.
     local code = [[
 local ok, raw = pcall(function() return readfile and isfile and isfile("]] .. autoexecPath .. [[") and readfile("]] .. autoexecPath .. [[") end)
 if not ok or not raw or raw == "" then return end
 local decodeOk, data = pcall(function() return game:GetService("HttpService"):JSONDecode(raw) end)
 if not decodeOk or type(data) ~= "table" or data.enabled ~= true then return end
 
--- SAFE AUTOEXEC: prefer local cache, fallback to URL, wait for character
 local function tryLoad()
     local sc = nil
-    -- 1) Local cache (saved from first run)
-    pcall(function()
-        if readfile and isfile and isfile("]] .. cachePath .. [[") then
-            sc = readfile("]] .. cachePath .. [[")
-        end
+    local okGet, res = pcall(function()
+        return game:HttpGet("https://raw.githubusercontent.com/brsssddaa/Skin-Changer/refs/heads/main/Skin%20Changer")
     end)
-    -- 3) Execute (no GitHub fallback: local cache only)
+    if okGet and res and res ~= "" then sc = res end
     if not sc or sc == "" then
-        warn("[SkinChanger] no local cache")
+        warn("[SkinChanger] github fetch failed")
         return
     end
-    if sc and sc ~= "" then
-        local Players = game:GetService("Players")
-        local plr = Players.LocalPlayer
-        local execStarted = false
-        local function exec()
-            if execStarted then return end
-            execStarted = true
-            local env = getgenv and getgenv() or _G
-            if env.__SkinChangerPremiumTeleportExecStarted then return end
-            env.__SkinChangerPremiumTeleportExecStarted = true
-            local ok2, err2 = pcall(loadstring, sc)
-            if ok2 and err2 then err2() end
-        end
-        if plr and plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character:FindFirstChild("Head") then
+    local Players = game:GetService("Players")
+    local plr = Players.LocalPlayer
+    local execStarted = false
+    local function exec()
+        if execStarted then return end
+        execStarted = true
+        local env = getgenv and getgenv() or _G
+        if env.__SkinChangerPremiumTeleportExecStarted then return end
+        env.__SkinChangerPremiumTeleportExecStarted = true
+        local ok2, fn = pcall(loadstring, sc)
+        if ok2 and fn then pcall(fn) end
+    end
+    if plr and plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character:FindFirstChild("Head") then
+        task.spawn(exec)
+    else
+        plr.CharacterAdded:Connect(function()
+            task.wait(2)
             task.spawn(exec)
-        else
-            plr.CharacterAdded:Connect(function()
-                task.wait(2) -- wait for game to load
-                task.spawn(exec)
-            end)
-        end
+        end)
     end
 end
 tryLoad()
@@ -933,19 +928,18 @@ tryLoad()
     return false
 end
 
--- Create auto-inject script content (loads from local cache or GitHub)
+-- Create auto-inject script content — тянем актуальную версию прямо с GitHub.
+-- Не зависит от имени локального .lua файла (раньше искали "Skin changer Remake.lua"
+-- и молча падали если у пользователя файл назывался иначе, например "Работающий.lua").
 function createAutoInjectScriptContent()
-    -- Detect executor and use appropriate path
     local autoexecPath = "SkinChanger/SkinChanger_Autoexec"
-    local mainScriptPath = "SkinChanger/SkinChanger_Main.lua"
     local executorName = detectCurrentExecutor()
     if executorName and executorName:find("xeno") then
         autoexecPath = "../workspace/SkinChanger/SkinChanger_Autoexec"
-        mainScriptPath = "../workspace/SkinChanger/SkinChanger_Main.lua"
     end
 
     return [[-- SkinChanger Premium AutoInject
--- Auto-generated. Loads from local cache or GitHub, with character-ready guard.
+-- Auto-generated. Loads latest version from GitHub, with character-ready guard.
 
 local guardKey = "__SkinChangerPremiumAutoInjectRunning"
 local env = getgenv and getgenv() or _G
@@ -954,36 +948,27 @@ env[guardKey] = true
 
 local function tryLoad()
     local sc = nil
-
-    -- 1) Try local cache first (saved from first manual run)
-    pcall(function()
-        if readfile and isfile and isfile("]] .. mainScriptPath .. [[") then
-            sc = readfile("]] .. mainScriptPath .. [[")
-        end
+    local okGet, res = pcall(function()
+        return game:HttpGet("https://raw.githubusercontent.com/brsssddaa/Skin-Changer/refs/heads/main/Skin%20Changer")
     end)
-
-    -- 3) Execute with character-ready guard (no GitHub fallback: local cache only)
+    if okGet and res and res ~= "" then sc = res end
     if not sc or sc == "" then
-        warn("[SkinChanger] no local cache")
+        warn("[SkinChanger] github fetch failed")
         return
     end
-    if sc and sc ~= "" then
-        local Players = game:GetService("Players")
-        local plr = Players.LocalPlayer
-        local function exec()
-            local ok2, fn = pcall(function() return loadstring(sc) end)
-            if ok2 and fn then
-                pcall(fn)
-            end
-        end
-        if plr and plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character:FindFirstChild("Head") then
+    local Players = game:GetService("Players")
+    local plr = Players.LocalPlayer
+    local function exec()
+        local ok2, fn = pcall(function() return loadstring(sc) end)
+        if ok2 and fn then pcall(fn) end
+    end
+    if plr and plr.Character and plr.Character:FindFirstChild("Humanoid") and plr.Character:FindFirstChild("Head") then
+        task.spawn(exec)
+    else
+        plr.CharacterAdded:Connect(function()
+            task.wait(2)
             task.spawn(exec)
-        else
-            plr.CharacterAdded:Connect(function()
-                task.wait(2) -- wait for game to fully set up character
-                task.spawn(exec)
-            end)
-        end
+        end)
     end
 end
 
@@ -1130,6 +1115,7 @@ local shaderActive = false
 local shaderOriginals = nil
 local shaderEffects = {}
 local shaderGodRaysFolder = nil
+local shaderVignetteGui = nil  -- виньетка Obsidian Mist пресета
 local shaderConnections = {}
 
 local function saveLightingOriginals()
@@ -1245,6 +1231,84 @@ SHADER_PRESETS = {
         },
         persistClockTime = 5.5,
     },
+    Amethyst = {
+        displayName = "Pack 3",
+        description = "Amethyst twilight with falling stardust",
+        kind = "amethyst",
+        lighting = {
+            ClockTime = 18.2,
+            Brightness = 2.2,
+            Ambient = Color3.fromRGB(85, 70, 120),
+            OutdoorAmbient = Color3.fromRGB(130, 105, 175),
+            ColorShift_Top = Color3.fromRGB(200, 130, 255),
+            ColorShift_Bottom = Color3.fromRGB(255, 140, 190),
+            FogColor = Color3.fromRGB(170, 130, 220),
+            FogStart = 0,
+            FogEnd = 1800,
+            ExposureCompensation = 0.25,
+        },
+        atmosphere = {
+            Density = 0.32,
+            Offset = 0.2,
+            Color = Color3.fromRGB(190, 150, 235),
+            Decay = Color3.fromRGB(255, 150, 210),
+            Glare = 1.2,
+            Haze = 1.1,
+        },
+        sunRays = { Intensity = 0.2, Spread = 0.9 },
+        bloom = { Intensity = 1.1, Size = 36, Threshold = 0.82 },
+        colorCorrection = {
+            TintColor = Color3.fromRGB(235, 210, 255),
+            Saturation = 0.22,
+            Contrast = 0.14,
+        },
+        ccPulse = { speed = 0.6, amount = 0.04 },  -- "дыхание" насыщенности
+        persistClockTime = 18.2,
+    },
+    ObsidianMist = {
+        displayName = "Pack 4",
+        description = "Dark noir evening with thick ground mist",
+        kind = "obsidian",
+        lighting = {
+            ClockTime = 17.6,
+            Brightness = 1.6,
+            Ambient = Color3.fromRGB(70, 85, 85),
+            OutdoorAmbient = Color3.fromRGB(105, 125, 122),
+            ColorShift_Top = Color3.fromRGB(140, 170, 165),
+            ColorShift_Bottom = Color3.fromRGB(90, 110, 108),
+            FogColor = Color3.fromRGB(125, 140, 138),
+            FogStart = 20,
+            FogEnd = 700,
+            ExposureCompensation = 0.15,
+        },
+        atmosphere = {
+            Density = 0.42,
+            Offset = 0.3,
+            Color = Color3.fromRGB(150, 165, 162),
+            Decay = Color3.fromRGB(95, 115, 112),
+            Glare = 0.4,
+            Haze = 1.6,
+        },
+        sunRays = { Intensity = 0, Spread = 1 },
+        bloom = { Intensity = 0.8, Size = 32, Threshold = 0.88 },
+        colorCorrection = {
+            TintColor = Color3.fromRGB(210, 228, 222),
+            Saturation = -0.12,
+            Contrast = 0.18,
+        },
+        depthOfField = {
+            FarIntensity = 0.28,
+            FocusDistance = 28,
+            InFocusRadius = 42,
+        },
+        smoke = {
+            rate = 14,
+            color = Color3.fromRGB(190, 205, 200),
+        },
+        vignette = 0.45,
+        breath = { ccSpeed = 0.35, ccAmount = 0.025, atmSpeed = 0.22, atmAmount = 0.03 },
+        persistClockTime = 17.6,
+    },
 }
 
 local activeShaderPreset = nil -- name of active preset
@@ -1317,6 +1381,179 @@ local function applyShaderPreset(presetName)
     if preset.kind == "night" then
         -- No effects for night pack (simple dark mode only)
         if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
+    elseif preset.kind == "amethyst" then
+        -- AMETHYST DREAM: без частиц (звёздная пыль убрана по просьбе пользователя),
+        -- только "дыхание" насыщенности
+        if shaderGodRaysFolder then pcall(function() shaderGodRaysFolder:Destroy() end); shaderGodRaysFolder = nil end
+        -- "Дыхание" сцены: едва заметная пульсация насыщенности
+        pcall(function()
+            local pulseCfg = preset.ccPulse
+            local pulseT = 0
+            shaderConnections.ccPulse = RunService.Heartbeat:Connect(function(dt)
+                if not shaderActive then return end
+                pulseT = pulseT + dt
+                pcall(function()
+                    cc.Saturation = preset.colorCorrection.Saturation + math.sin(pulseT * pulseCfg.speed) * pulseCfg.amount
+                end)
+            end)
+        end)
+    elseif preset.kind == "obsidian" then
+        -- OBSIDIAN MIST: DOF + виньетка + "дыхание" тумана + густой статичный дым (сетка 5×5)
+        pcall(function()
+            local dof = createOrGetEffect("DepthOfFieldEffect", "SkinChanger_DOF")
+            dof.FarIntensity = 0
+            dof.NearIntensity = 0
+            dof.FocusDistance = preset.depthOfField.FocusDistance
+            dof.InFocusRadius = preset.depthOfField.InFocusRadius
+            shaderEffects.dof = dof
+            TweenService:Create(dof, TweenInfo.new(d), {FarIntensity = preset.depthOfField.FarIntensity}):Play()
+        end)
+        -- Виньетка (кино-рамка)
+        pcall(function()
+            if shaderVignetteGui then shaderVignetteGui:Destroy() end
+            local gui = Instance.new("ScreenGui")
+            gui.Name = "SkinChanger_Vignette"
+            gui.IgnoreGuiInset = true
+            gui.DisplayOrder = 999
+            gui.ResetOnSpawn = false
+            gui.Parent = (guiHostOk and guiHost) or CoreGui
+            shaderVignetteGui = gui
+            local function edge(props)
+                local fr = Instance.new("Frame")
+                fr.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+                fr.BorderSizePixel = 0
+                fr.Size = props.size
+                fr.Position = props.pos
+                fr.BackgroundTransparency = 1
+                fr.Parent = gui
+                local g = Instance.new("UIGradient")
+                g.Color = ColorSequence.new(Color3.new(0, 0, 0))
+                g.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 1 - preset.vignette),
+                    NumberSequenceKeypoint.new(1, 1),
+                })
+                g.Rotation = props.rot
+                g.Parent = fr
+                TweenService:Create(fr, TweenInfo.new(d), {BackgroundTransparency = 0}):Play()
+            end
+            edge({size = UDim2.new(1, 0, 0.18, 0), pos = UDim2.new(0, 0, 0, 0),    rot = 90})
+            edge({size = UDim2.new(1, 0, 0.18, 0), pos = UDim2.new(0, 0, 0.82, 0), rot = -90})
+            edge({size = UDim2.new(0.14, 0, 1, 0), pos = UDim2.new(0, 0, 0, 0),    rot = 0})
+            edge({size = UDim2.new(0.14, 0, 1, 0), pos = UDim2.new(0.86, 0, 0, 0), rot = 180})
+        end)
+        -- "Дыхание" тумана: экспозиция и плотность медленно колышутся
+        pcall(function()
+            local br = preset.breath
+            local breathT = 0
+            shaderConnections.breath = RunService.Heartbeat:Connect(function(dt)
+                if not shaderActive then return end
+                breathT = breathT + dt
+                pcall(function()
+                    cc.Brightness = math.sin(breathT * br.ccSpeed) * br.ccAmount
+                    atmosphere.Density = preset.atmosphere.Density + math.sin(breathT * br.atmSpeed) * br.atmAmount
+                end)
+            end)
+        end)
+        -- Густой стелющийся дым: статичная сетка эмиттеров, дым живёт в мире
+        -- и НЕ следует за персонажем; сетка переезжает когда игрок уходит далеко.
+        pcall(function()
+            if shaderGodRaysFolder then shaderGodRaysFolder:Destroy() end
+            local folder = Instance.new("Folder")
+            folder.Name = "SkinChanger_GodRays"
+            folder.Parent = workspace
+            shaderGodRaysFolder = folder
+
+            local GRID_N = 5
+            local GRID_STEP = 30
+            local gridCenter = nil
+            local smokeParts = {}
+            local smokeCfg = preset.smoke
+
+            local function groundYAt(x, z, fromY)
+                local rayParams = RaycastParams.new()
+                rayParams.FilterType = Enum.RaycastFilterType.Exclude
+                rayParams.FilterDescendantsInstances = {folder, player.Character}
+                local res = workspace:Raycast(Vector3.new(x, fromY + 50, z), Vector3.new(0, -200, 0), rayParams)
+                if res then return res.Position.Y end
+                return fromY - 3
+            end
+
+            local function makeSmokeEmitter(parent)
+                local sm = Instance.new("ParticleEmitter")
+                sm.Texture = "rbxasset://textures/particles/smoke_main.dds"
+                sm.Color = ColorSequence.new(smokeCfg.color)
+                sm.Size = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 4),
+                    NumberSequenceKeypoint.new(0.5, 8),
+                    NumberSequenceKeypoint.new(1, 12),
+                })
+                sm.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 1),
+                    NumberSequenceKeypoint.new(0.2, 0.82),
+                    NumberSequenceKeypoint.new(0.7, 0.88),
+                    NumberSequenceKeypoint.new(1, 1),
+                })
+                sm.Lifetime = NumberRange.new(6, 10)
+                sm.Rate = math.max(1, math.floor(smokeCfg.rate * 1.7 / (GRID_N * GRID_N) + 0.5))
+                sm.Speed = NumberRange.new(0.6, 1.6)
+                sm.SpreadAngle = Vector2.new(180, 180)
+                sm.Acceleration = Vector3.new(0.4, 0.08, 0.2)
+                sm.EmissionDirection = Enum.NormalId.Top
+                sm.LightEmission = 0.08
+                sm.LightInfluence = 0.6
+                sm.Rotation = NumberRange.new(0, 360)
+                sm.RotSpeed = NumberRange.new(-6, 6)
+                sm.ZOffset = -2
+                sm.Parent = parent
+            end
+
+            local function buildGrid(center)
+                gridCenter = center
+                for _, pp in ipairs(smokeParts) do pcall(function() pp:Destroy() end) end
+                smokeParts = {}
+                local half = (GRID_N - 1) / 2
+                for ix = 0, GRID_N - 1 do
+                    for iz = 0, GRID_N - 1 do
+                        local x = center.X + (ix - half) * GRID_STEP
+                        local z = center.Z + (iz - half) * GRID_STEP
+                        local y = groundYAt(x, z, center.Y)
+                        local part = Instance.new("Part")
+                        part.Name = "GroundMist"
+                        part.Size = Vector3.new(0.1, 0.1, 0.1)
+                        part.Transparency = 1
+                        part.Anchored = true
+                        part.CanCollide = false; part.CanQuery = false; part.CanTouch = false
+                        part.Massless = true; part.CastShadow = false
+                        part.CFrame = CFrame.new(x, y + 0.5, z)
+                        part.Parent = folder
+                        makeSmokeEmitter(part)
+                        table.insert(smokeParts, part)
+                    end
+                end
+            end
+
+            local char = player.Character
+            local hrp = char and char:FindFirstChild("HumanoidRootPart")
+            buildGrid(hrp and hrp.Position or Vector3.new(0, 5, 0))
+
+            local RELOCATE_DIST = GRID_STEP * (GRID_N - 1) / 2 + 25
+            local lastCheck = 0
+            shaderConnections.mistFollow = RunService.Heartbeat:Connect(function()
+                if not shaderActive then return end
+                local now = tick()
+                if now - lastCheck < 1 then return end
+                lastCheck = now
+                local ch = player.Character
+                local root = ch and ch:FindFirstChild("HumanoidRootPart")
+                if root and gridCenter then
+                    local delta = root.Position - gridCenter
+                    local flatDist = math.sqrt(delta.X ^ 2 + delta.Z ^ 2)
+                    if flatDist > RELOCATE_DIST then
+                        buildGrid(root.Position)
+                    end
+                end
+            end)
+        end)
     else
         -- Default: sunset-style god rays
         pcall(function()
@@ -1420,11 +1657,16 @@ function removeShaderImmediate()
     end
 
     -- Destroy effects synchronously
-    for _, name in ipairs({"SkinChanger_Atmosphere", "SkinChanger_SunRays", "SkinChanger_Bloom", "SkinChanger_ColorCorrection"}) do
+    for _, name in ipairs({"SkinChanger_Atmosphere", "SkinChanger_SunRays", "SkinChanger_Bloom", "SkinChanger_ColorCorrection", "SkinChanger_DOF"}) do
         local eff = Lighting:FindFirstChild(name)
         if eff then pcall(function() eff:Destroy() end) end
     end
     shaderEffects = {}
+
+    if shaderVignetteGui then
+        pcall(function() shaderVignetteGui:Destroy() end)
+        shaderVignetteGui = nil
+    end
 
     if shaderGodRaysFolder then
         pcall(function() shaderGodRaysFolder:Destroy() end)
@@ -1457,13 +1699,13 @@ local function removeShader()
     end
     
     task.delay(d + 0.1, function()
-        for _, name in ipairs({"SkinChanger_Atmosphere", "SkinChanger_SunRays", "SkinChanger_Bloom", "SkinChanger_ColorCorrection"}) do
+        for _, name in ipairs({"SkinChanger_Atmosphere", "SkinChanger_SunRays", "SkinChanger_Bloom", "SkinChanger_ColorCorrection", "SkinChanger_DOF"}) do
             local eff = Lighting:FindFirstChild(name)
             if eff then pcall(function() eff:Destroy() end) end
         end
         shaderEffects = {}
     end)
-    
+
     if shaderEffects.sunRays then
         pcall(function() TweenService:Create(shaderEffects.sunRays, TweenInfo.new(d), {Intensity = 0}):Play() end)
     end
@@ -1480,7 +1722,24 @@ local function removeShader()
     if shaderEffects.atmosphere then
         pcall(function() TweenService:Create(shaderEffects.atmosphere, TweenInfo.new(d), {Density = 0, Glare = 0, Haze = 0}):Play() end)
     end
-    
+    if shaderEffects.dof then
+        pcall(function() TweenService:Create(shaderEffects.dof, TweenInfo.new(d), {FarIntensity = 0}):Play() end)
+    end
+
+    -- Гасим виньетку плавно, потом удаляем
+    if shaderVignetteGui then
+        local vg = shaderVignetteGui
+        shaderVignetteGui = nil
+        pcall(function()
+            for _, fr in ipairs(vg:GetChildren()) do
+                if fr:IsA("Frame") then
+                    TweenService:Create(fr, TweenInfo.new(d), {BackgroundTransparency = 1}):Play()
+                end
+            end
+        end)
+        task.delay(d + 0.1, function() pcall(function() vg:Destroy() end) end)
+    end
+
     if shaderGodRaysFolder then
         pcall(function() shaderGodRaysFolder:Destroy() end)
         shaderGodRaysFolder = nil
@@ -1515,6 +1774,29 @@ end)
 ----------------------------------------------------------------
 -- applySavedSkin
 ----------------------------------------------------------------
+-- Текстура головы скина для face-enforcer'ов. Приоритет:
+-- 1) skinData.headTexture (новые записи), 2) headMesh.TextureId (старые записи:
+-- у "особых" голов глаза/ресницы/румянец зашиты в текстуру SpecialMesh — обнулять нельзя).
+function scGetSkinHeadTexture(sd)
+    if not sd then return "" end
+    if type(sd.headTexture) == "string" and sd.headTexture ~= "" then
+        return sd.headTexture
+    end
+    local hm = sd.headMesh
+    if hm ~= nil then
+        local tex
+        pcall(function()
+            if type(hm) == "table" then
+                tex = hm.TextureId
+            else
+                tex = hm.TextureId  -- Instance (SpecialMesh)
+            end
+        end)
+        if type(tex) == "string" then return tex end
+    end
+    return ""
+end
+
 function applySavedSkin(skinData)
     if not player.Character then return end
     do
@@ -1601,6 +1883,10 @@ function applySavedSkin(skinData)
     -- РЕШЕНИЕ: держим watcher на несколько секунд, который непрерывно чистит
     -- лишние face-decals и встроенные smiley — любая async вставка от Roblox сносится сразу.
     local function makeFaceEnforcer(targetFaceUrl)
+        -- headTexture: у "особых" голов (MeshPart из каталога) глаза/лицо — это
+        -- ТЕКСТУРА ГОЛОВЫ, а не face-decal. Обнулять её нельзя, иначе глаза пропадают.
+        -- Восстанавливаем сохранённую текстуру вместо безусловного "".
+        local ht = scGetSkinHeadTexture(skinData)
         return function()
             pcall(function()
                 local ch = player.Character
@@ -1620,9 +1906,9 @@ function applySavedSkin(skinData)
                         end
                     end
                 end
-                if h:IsA("MeshPart") then h.TextureID = "" end
+                if h:IsA("MeshPart") then h.TextureID = ht end
                 local sm = h:FindFirstChildOfClass("SpecialMesh")
-                if sm then sm.TextureId = "" end
+                if sm then sm.TextureId = ht end
                 if wantCustom and not kept then
                     local nf = Instance.new("Decal")
                     nf.Name = "face"; nf.Face = Enum.NormalId.Front
@@ -1875,10 +2161,11 @@ function applySavedSkin(skinData)
         -- КРИТИЧНО ДЛЯ R6: встроенная smiley-текстура сидит в самом Head MeshPart.
         -- Если у target'а не было SpecialMesh (skinData.headMesh == nil), Head остаётся
         -- со встроенной smiley → она проступает сквозь face Decal с alpha-каналами.
-        -- Обнуляем TextureID на MeshPart, чтобы skin-face был единственным лицом.
+        -- Ставим сохранённую headTexture скина (или пусто) — у "особых" голов
+        -- глаза зашиты именно в текстуру головы и обнулять её нельзя.
         pcall(function()
             if myHead:IsA("MeshPart") then
-                myHead.TextureID = ""
+                myHead.TextureID = scGetSkinHeadTexture(skinData)
             end
         end)
 
@@ -1904,9 +2191,10 @@ function applySavedSkin(skinData)
                     end
                 else
                     if f then f:Destroy() end
-                    if h:IsA("MeshPart") then h.TextureID = "" end
+                    local ht2 = scGetSkinHeadTexture(skinData)
+                    if h:IsA("MeshPart") then h.TextureID = ht2 end
                     local sm = h:FindFirstChildOfClass("SpecialMesh")
-                    if sm then sm.TextureId = "" end
+                    if sm then sm.TextureId = ht2 end
                 end
             end)
         end
@@ -1928,13 +2216,14 @@ function applySavedSkin(skinData)
             end
         end
     else
-        -- Нет сохранённого мешa: обнуляем TextureId у существующего SpecialMesh
-        -- чтобы встроенная smiley не показывалась поверх face Decal.
+        -- Нет сохранённого мешa: ставим сохранённую headTexture (или пусто) у SpecialMesh
+        -- чтобы встроенная smiley не показывалась поверх face Decal, но "особые" головы
+        -- с глазами в текстуре не теряли глаза.
         pcall(function()
             local mh = player.Character:FindFirstChild("Head")
             if mh then
                 local existing = mh:FindFirstChildOfClass("SpecialMesh")
-                if existing then existing.TextureId = "" end
+                if existing then existing.TextureId = scGetSkinHeadTexture(skinData) end
             end
         end)
     end
@@ -2148,6 +2437,19 @@ function applySkin(targetPlayer)
         pcall(function()
             local tHead = targetChar:FindFirstChild("Head")
             if tHead then
+                -- headTexture: у "особых" голов глаза/лицо зашиты в текстуру головы —
+                -- сохраняем ДО face-логики, чтобы enforce не стирал глаза.
+                savedSkinData.headTexture = ""
+                pcall(function()
+                    if tHead:IsA("MeshPart") and tHead.TextureID ~= "" then
+                        savedSkinData.headTexture = tHead.TextureID
+                    else
+                        local thsm = tHead:FindFirstChildOfClass("SpecialMesh")
+                        if thsm and thsm.TextureId ~= "" then
+                            savedSkinData.headTexture = thsm.TextureId
+                        end
+                    end
+                end)
                 local f = tHead:FindFirstChild("face")
                 if f and f.Texture and f.Texture ~= ""
                    and f.Texture ~= "rbxasset://textures/face.png" then
@@ -2157,6 +2459,7 @@ function applySkin(targetPlayer)
                     -- из-за async ApplyDescription) + встроенные smiley → одна decal.
                     local myHead = player.Character and player.Character:FindFirstChild("Head")
                     local savedFaceUrl = f.Texture
+                    local savedHeadTex = scGetSkinHeadTexture(savedSkinData)
                     local function enforce()
                         if not myHead or not myHead.Parent then return end
                         pcall(function()
@@ -2165,9 +2468,9 @@ function applySkin(targetPlayer)
                                     child:Destroy()
                                 end
                             end
-                            if myHead:IsA("MeshPart") then myHead.TextureID = "" end
+                            if myHead:IsA("MeshPart") then myHead.TextureID = savedHeadTex end
                             local sm = myHead:FindFirstChildOfClass("SpecialMesh")
-                            if sm then sm.TextureId = "" end
+                            if sm then sm.TextureId = savedHeadTex end
                             local nf = Instance.new("Decal")
                             nf.Name = "face"; nf.Face = Enum.NormalId.Front
                             nf.Texture = savedFaceUrl
@@ -2186,14 +2489,15 @@ function applySkin(targetPlayer)
                     -- чтобы при apply убрать дефолтную улыбку от ApplyDescription.
                     savedSkinData.face = ""
                     local myHead = player.Character and player.Character:FindFirstChild("Head")
+                    local savedHeadTex2 = scGetSkinHeadTexture(savedSkinData)
                     if myHead then
                         task.delay(0.3, function()
                             pcall(function()
                                 local mf = myHead:FindFirstChild("face")
                                 if mf then mf:Destroy() end
-                                if myHead:IsA("MeshPart") then myHead.TextureID = "" end
+                                if myHead:IsA("MeshPart") then myHead.TextureID = savedHeadTex2 end
                                 local sm = myHead:FindFirstChildOfClass("SpecialMesh")
-                                if sm then sm.TextureId = "" end
+                                if sm then sm.TextureId = savedHeadTex2 end
                             end)
                         end)
                     end
@@ -2233,6 +2537,18 @@ function applySkin(targetPlayer)
             -- Roblox добавляет автоматически при ApplyDescription/respawn.
             savedSkinData.face = ""
         end
+        -- headTexture: глаза/лицо "особых" голов зашиты в текстуру головы — сохраняем.
+        savedSkinData.headTexture = ""
+        pcall(function()
+            if targetHead:IsA("MeshPart") and targetHead.TextureID ~= "" then
+                savedSkinData.headTexture = targetHead.TextureID
+            else
+                local hsm = targetHead:FindFirstChildOfClass("SpecialMesh")
+                if hsm and hsm.TextureId ~= "" then
+                    savedSkinData.headTexture = hsm.TextureId
+                end
+            end
+        end)
         local m = targetHead:FindFirstChildOfClass("SpecialMesh")
         if m then
             local clone = m:Clone()
@@ -2817,6 +3133,19 @@ function captureSkinSnapshot(targetPlayer)
             -- На apply это уберёт классическую улыбку, добавляемую ApplyDescription.
             skinData.face = ""
         end
+        -- headTexture: у "особых" голов (каталожные MeshPart-головы) глаза/лицо зашиты
+        -- в ТЕКСТУРУ ГОЛОВЫ. Сохраняем, чтобы face-enforcer не обнулял её при apply.
+        skinData.headTexture = ""
+        pcall(function()
+            if tHead:IsA("MeshPart") and tHead.TextureID ~= "" then
+                skinData.headTexture = tHead.TextureID
+            else
+                local hsm = tHead:FindFirstChildOfClass("SpecialMesh")
+                if hsm and hsm.TextureId ~= "" then
+                    skinData.headTexture = hsm.TextureId
+                end
+            end
+        end)
         local m = tHead:FindFirstChildOfClass("SpecialMesh")
         if m then
             local clone = m:Clone()
@@ -4061,11 +4390,15 @@ do local function buildLightMenuTab()
     local shBtn = mkToggleBtn(shRow, activeShaderPreset ~= nil)
     shBtn.Text = activeShaderPreset or "OFF"
     shBtn.MouseButton1Click:Connect(function()
-        -- Циклический перебор: OFF -> Sunset -> Night -> OFF
+        -- Циклический перебор: OFF -> Sunset -> Night -> Amethyst -> ObsidianMist -> OFF
         if activeShaderPreset == nil then
             pcall(function() applyShaderPreset("Sunset") end)
         elseif activeShaderPreset == "Sunset" then
             pcall(function() applyShaderPreset("Night") end)
+        elseif activeShaderPreset == "Night" then
+            pcall(function() applyShaderPreset("Amethyst") end)
+        elseif activeShaderPreset == "Amethyst" then
+            pcall(function() applyShaderPreset("ObsidianMist") end)
         else
             pcall(function() if removeShader then removeShader() end end)
         end
@@ -4527,12 +4860,10 @@ do
         end
         -- Применяем новый режим live (nav-бар, MENU tab, заголовок, rig, Settings-layout)
         if syncLightMenu then pcall(syncLightMenu) end
-        -- Закрываем и открываем меню, чтобы новая раскладка сразу применилась к виду
-        task.spawn(function()
-            if closeMenu then pcall(closeMenu) end
-            task.wait(0.35)
-            if openMenu then pcall(openMenu) end
-        end)
+        -- Закрываем меню чтобы новая раскладка применилась при следующем открытии.
+        -- НЕ переоткрываем автоматически: пока меню открыто, Roblox помечает клавиатурные
+        -- события gameProcessed=true и Insert для очков не срабатывает.
+        if closeMenu then pcall(closeMenu) end
     end)
 end
 
@@ -6601,13 +6932,39 @@ end)
 headIconBtn.MouseLeave:Connect(function()
     tween(headIcon, 0.15, {Size = UDim2.fromOffset(44, 44), BackgroundTransparency = 0.15})
 end)
--- В Light Menu клик по круглой иконке открывает/закрывает Skin Changer.
-if lightMenu then
-    headIconBtn.MouseButton1Click:Connect(function()
-        if scriptDisabled then return end
+-- Клик по HeadIcon:
+--   Low Menu   → открыть/закрыть меню Skin Changer;
+--   иначе, если очки не надеты → надеть очки + показать 3D-панели;
+--   иначе, если 3D-панели спрятаны Hide-кнопкой → показать их обратно;
+--   иначе (панели видны) → снять очки.
+-- Привязываем всегда (не только при lightMenu=true), режим проверяется в момент клика.
+headIconBtn.MouseButton1Click:Connect(function()
+    if scriptDisabled then return end
+    if lightMenu then
         if toggleMenu then pcall(toggleMenu) end
-    end)
-end
+        return
+    end
+    if g_isAnimating then return end
+    if not g_glassesOpen then
+        task.spawn(function()
+            if g_putOnGlasses then pcall(g_putOnGlasses) end
+            if g_glassesOpen and showGlassesWorldMenus then pcall(showGlassesWorldMenus) end
+        end)
+    elseif glassesHidden then
+        if showGlassesWorldMenus then pcall(showGlassesWorldMenus) end
+        headIconUserHidden = false
+        if headIconAvatar and headIconAvatar.Parent then
+            TweenService:Create(headIconAvatar, TweenInfo.new(0.3, Enum.EasingStyle.Back, Enum.EasingDirection.Out), {
+                Rotation = 0,
+                Size = UDim2.fromOffset(36, 36),
+                ImageTransparency = 0
+            }):Play()
+        end
+    else
+        if hideGlassesWorldMenus then pcall(hideGlassesWorldMenus) end
+        task.spawn(function() if g_takeOffGlasses then pcall(g_takeOffGlasses) end end)
+    end
+end)
 
 local headIconUserHidden = false
 
@@ -6622,10 +6979,8 @@ function updateHeadIconPosition()
         headIcon.Visible = false
         return
     end
-    if not lightMenu and not g_glassesOpen then
-        headIcon.Visible = false
-        return
-    end
+    -- Иконка видна всегда (кроме HideIcon/userHidden): даже когда очки сняты и Low Menu выключен,
+    -- иначе после отключения Low Menu не по чему кликать чтобы надеть очки.
     local cam = workspace.CurrentCamera
     if not cam then return end
     if not character or not character.Parent then
@@ -6844,6 +7199,7 @@ scriptConnections.charAdded2 = player.CharacterAdded:Connect(function(newChar)
             -- watcher на 5+ секунд, который непрерывно сносит лишние face-decals
             -- и держит правильную. Это ловит async вставки Roblox в любое время.
             local targetFace = savedSkinData and savedSkinData.face
+            local targetHeadTex = scGetSkinHeadTexture(savedSkinData)
             local function faceStep()
                 pcall(function()
                     local ch = player.Character
@@ -6861,9 +7217,9 @@ scriptConnections.charAdded2 = player.CharacterAdded:Connect(function(newChar)
                             end
                         end
                     end
-                    if h:IsA("MeshPart") then h.TextureID = "" end
+                    if h:IsA("MeshPart") then h.TextureID = targetHeadTex end
                     local sm = h:FindFirstChildOfClass("SpecialMesh")
-                    if sm then sm.TextureId = "" end
+                    if sm then sm.TextureId = targetHeadTex end
                     if wantCustom and not kept then
                         local nf = Instance.new("Decal")
                         nf.Name = "face"; nf.Face = Enum.NormalId.Front
@@ -7066,6 +7422,72 @@ function invSetBind(keyName)
     scWriteSettings(s)
 end
 
+----------------------------------------------------------------
+-- Bind ENABLED флаг (сохраняется в SkinChanger_Settings как
+-- invisibleBindEnabledEnc — XOR-encoded payload + rolling-hash сигнатура.
+-- Если пользователь вручную поменяет значение в файле — сигнатура не сойдётся
+-- и invGetBindEnabled() вернёт false, т.е. функция останется выключенной.
+-- Ключ INV_SALT задан массивом байт (обфусцированно), чтобы grep по файлу
+-- не находил очевидную строку-соль.
+----------------------------------------------------------------
+local INV_SALT = string.char(0x5A,0x71,0x37,0x64,0x50,0x6D,0x21,0x58,0x6B,0x39,0x77,0x54,0x72,0x2E,0x62,0x59)
+-- Псевдослучайное значение для nonce (не math.random чтобы не зависеть от seed'а игры)
+local function invRandInt()
+    return math.floor((tick() * 1000) % 2147483647) + math.floor(os.clock() * 987654 % 100000)
+end
+function invEncodeEnabled(state)
+    local marker  = state and "Y" or "N"
+    local nonce   = tostring(invRandInt())
+    local payload = marker .. ":" .. nonce
+    -- rolling hash подписи: h = (h*31 + byte) mod P с payload+SALT
+    local combined = payload .. INV_SALT
+    local sig = 5381
+    for i = 1, #combined do
+        sig = (sig * 33 + string.byte(combined, i)) % 2147483647
+    end
+    -- XOR-обфускация payload'а байтами, зависящими от sig+i
+    local encHex = {}
+    for i = 1, #payload do
+        local b = string.byte(payload, i)
+        local mask = (math.floor(sig / (2 ^ ((i - 1) % 24))) + i * 17) % 256
+        encHex[#encHex + 1] = string.format("%02x", bit32.bxor(b, mask))
+    end
+    return table.concat(encHex) .. string.format("%08x", sig)
+end
+function invDecodeEnabled(str)
+    if type(str) ~= "string" or #str < 10 then return false end
+    local sigHex = str:sub(-8)
+    local sig = tonumber(sigHex, 16)
+    if not sig then return false end
+    local encHex = str:sub(1, -9)
+    if #encHex % 2 ~= 0 then return false end
+    local bytes = {}
+    for i = 1, #encHex / 2 do
+        local b = tonumber(encHex:sub(i * 2 - 1, i * 2), 16)
+        if not b then return false end
+        local mask = (math.floor(sig / (2 ^ ((i - 1) % 24))) + i * 17) % 256
+        bytes[i] = string.char(bit32.bxor(b, mask))
+    end
+    local payload = table.concat(bytes)
+    -- Verify sig
+    local combined = payload .. INV_SALT
+    local check = 5381
+    for i = 1, #combined do
+        check = (check * 33 + string.byte(combined, i)) % 2147483647
+    end
+    if check ~= sig then return false end
+    return payload:sub(1, 1) == "Y"
+end
+function invGetBindEnabled()
+    local s = scReadSettings()
+    return invDecodeEnabled(s.invisibleBindEnabledEnc)
+end
+function invSetBindEnabled(state)
+    local s = scReadSettings()
+    s.invisibleBindEnabledEnc = invEncodeEnabled(state == true)
+    scWriteSettings(s)
+end
+
 function invGetAnimIdFromScript(animate, folderName, fallbackId)
     if not animate then return fallbackId end
     local folder = animate:FindFirstChild(folderName)
@@ -7202,7 +7624,7 @@ function invCleanup()
 
     if invActionBtnRef then
         pcall(function()
-            invActionBtnRef.Text = "Invisible v1"
+            invActionBtnRef.Text = "Dsink v1"
         end)
     end
 end
@@ -7482,6 +7904,9 @@ UserInputService.InputBegan:Connect(function(input, gameProcessed)
     if scriptDisabled then return end
     if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
     if inv_awaitingBind then return end
+    -- Bind должен быть явно включён тумблером ON. Если файл-настроек подделан вручную
+    -- (не пройдёт проверка сигнатуры) — invGetBindEnabled вернёт false и бинд не сработает.
+    if not invGetBindEnabled() then return end
     local bindName = invGetBind()
     if bindName == "" then return end
     if input.KeyCode.Name == bindName then
@@ -7496,6 +7921,140 @@ pcall(function()
         if inv_isActive then invCleanup() end
     end)
 end)
+
+----------------------------------------------------------------
+-- ESP MODULE (Special Features)
+-- Подсветка ВСЕГО тела игрока (включая аксессуары: шапки, хвосты и т.д.)
+-- через Highlight с DepthMode = AlwaysOnTop — видно сквозь стены.
+-- Нежно-белая полупрозрачная заливка + чёткий контур.
+-- Бинд + шифрованный флаг разрешения бинда — та же схема, что у Dsink v1.
+-- NOTE: Roblox рендерит максимум 31 Highlight одновременно.
+----------------------------------------------------------------
+local esp_enabled = false
+local esp_adorns  = {}   -- [Player] = Highlight
+local esp_charConns = {} -- [Player] = RBXScriptConnection (CharacterAdded)
+local esp_globalConns = {}
+
+local ESP_FILL_COLOR          = Color3.fromRGB(250, 248, 244)
+local ESP_FILL_TRANSPARENCY   = 0.55
+local ESP_OUTLINE_COLOR       = Color3.fromRGB(255, 255, 255)
+local ESP_OUTLINE_TRANSPARENCY = 0.1
+
+function espGetBind()
+    local s = scReadSettings()
+    local binds = s.espBinds
+    if type(binds) ~= "table" then return "" end
+    local v = binds[invGetExecutorKey()]
+    if v == nil then return "" end
+    return tostring(v)
+end
+
+function espBindLabel()
+    local b = espGetBind()
+    if b == "" then return "Bind: None" end
+    return "Bind: " .. b
+end
+
+function espSetBind(keyName)
+    local s = scReadSettings()
+    if type(s.espBinds) ~= "table" then s.espBinds = {} end
+    s.espBinds[invGetExecutorKey()] = tostring(keyName)
+    scWriteSettings(s)
+end
+
+function espGetBindEnabled()
+    local s = scReadSettings()
+    return invDecodeEnabled(s.espBindEnabledEnc)
+end
+
+function espSetBindEnabled(state)
+    local s = scReadSettings()
+    s.espBindEnabledEnc = invEncodeEnabled(state == true)
+    scWriteSettings(s)
+end
+
+local function espAttachToCharacter(p, char)
+    if not esp_enabled or not char then return end
+    task.spawn(function()
+        -- Ждём пока персонаж соберётся (иначе Highlight может не подцепиться)
+        if not char:FindFirstChild("HumanoidRootPart") then
+            char:WaitForChild("HumanoidRootPart", 5)
+        end
+        if not esp_enabled then return end
+        if esp_adorns[p] then pcall(function() esp_adorns[p]:Destroy() end); esp_adorns[p] = nil end
+        local hl = Instance.new("Highlight")
+        hl.Name = "SC_EspBody_" .. p.Name
+        hl.Adornee = char                                    -- вся модель: тело + аксессуары
+        hl.DepthMode = Enum.HighlightDepthMode.AlwaysOnTop   -- сквозь стены
+        hl.FillColor = ESP_FILL_COLOR
+        hl.FillTransparency = ESP_FILL_TRANSPARENCY
+        hl.OutlineColor = ESP_OUTLINE_COLOR
+        hl.OutlineTransparency = ESP_OUTLINE_TRANSPARENCY
+        hl.Enabled = true
+        -- Парентим наружу (gethui/CoreGui) — Highlight внутри чужого Character игра может удалить
+        hl.Parent = (guiHostOk and guiHost) or CoreGui
+        esp_adorns[p] = hl
+    end)
+end
+
+local function espWatchPlayer(p)
+    if p == player then return end
+    if p.Character then espAttachToCharacter(p, p.Character) end
+    if esp_charConns[p] then pcall(function() esp_charConns[p]:Disconnect() end) end
+    esp_charConns[p] = p.CharacterAdded:Connect(function(c)
+        task.wait(0.3)
+        espAttachToCharacter(p, c)
+    end)
+end
+
+function espEnable()
+    if esp_enabled then return end
+    esp_enabled = true
+    for _, p in ipairs(Players:GetPlayers()) do espWatchPlayer(p) end
+    esp_globalConns.added = Players.PlayerAdded:Connect(espWatchPlayer)
+    esp_globalConns.removing = Players.PlayerRemoving:Connect(function(p)
+        if esp_adorns[p] then pcall(function() esp_adorns[p]:Destroy() end); esp_adorns[p] = nil end
+        if esp_charConns[p] then pcall(function() esp_charConns[p]:Disconnect() end); esp_charConns[p] = nil end
+    end)
+end
+
+function espDisable()
+    if not esp_enabled then return end
+    esp_enabled = false
+    for p, ad in pairs(esp_adorns) do pcall(function() ad:Destroy() end) end
+    esp_adorns = {}
+    for p, c in pairs(esp_charConns) do pcall(function() c:Disconnect() end) end
+    esp_charConns = {}
+    for _, c in pairs(esp_globalConns) do pcall(function() c:Disconnect() end) end
+    esp_globalConns = {}
+end
+
+function espToggle()
+    if esp_enabled then espDisable() else espEnable() end
+end
+
+function espIsActive() return esp_enabled end
+
+esp_awaitingBind = false
+
+-- ESP bind listener (та же защита: бинд работает только при включённом ползунке)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if scriptDisabled then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    if esp_awaitingBind or inv_awaitingBind then return end
+    if not espGetBindEnabled() then return end
+    local bindName = espGetBind()
+    if bindName == "" then return end
+    if input.KeyCode.Name == bindName then
+        espToggle()
+        if espActionBtnRef then
+            pcall(function() espActionBtnRef.Text = esp_enabled and "Esp: ON" or "Esp" end)
+        end
+    end
+end)
+
+espActionBtnRef = nil
 
 invActionBtnRef = nil
 inv_awaitingBind = false
@@ -7844,9 +8403,22 @@ function createPasswordMenu()
 
         enterBtn.MouseButton1Click:Connect(function()
             if passwordEntered:lower() == CORRECT_PASSWORD:lower() then
-                specialMenuAuthenticated = true
                 passwordEntered = ""
-                toggleSpecialFeaturesMenu()
+                -- Закрываем password-панель вручную (НЕ через toggle — он сбрасывает
+                -- authenticated и specialMenuOpen, из-за чего после Hide/Show меню
+                -- не восстанавливалось и требовало пароль заново).
+                for i, p in ipairs(worldPanels) do
+                    if p.part == specialMenuPart then
+                        table.remove(worldPanels, i)
+                        break
+                    end
+                end
+                if specialMenuPart then
+                    specialMenuPart:Destroy()
+                    specialMenuPart = nil
+                end
+                specialMenuAuthenticated = true
+                specialMenuOpen = true
                 createEmptySpecialMenu()
             else
                 passwordDisplay.Text = "Wrong!"
@@ -7993,26 +8565,7 @@ function createEmptySpecialMenu()
         -- Use wmPanelRoot for consistent styling with main menu
         root = wmPanelRoot(sg, onDragStart, onDragInput, onDragEnd)
 
-        -- Back button (only on back side)
-        if isBackSide then
-            local backBtn = Instance.new("TextButton")
-            backBtn.Size = UDim2.fromOffset(32, 32)
-            backBtn.Position = UDim2.new(1, -130, 0, 24)
-            backBtn.BackgroundTransparency = 1
-            backBtn.Text = "Back"
-            backBtn.TextColor3 = Theme.primary
-            backBtn.Font = FONT_BOLD
-            backBtn.TextSize = 24
-            backBtn.TextXAlignment = Enum.TextXAlignment.Center
-            backBtn.TextYAlignment = Enum.TextYAlignment.Center
-            backBtn.AutoButtonColor = false
-            backBtn.ZIndex = 10
-            backBtn.Parent = root
-
-            backBtn.MouseButton1Click:Connect(function()
-                runFlipAnim(sg, worldPanels)
-            end)
-        end
+        -- (Back-кнопка на обратной стороне убрана по просьбе пользователя)
 
         -- Title
         local title = Instance.new("TextLabel")
@@ -8034,7 +8587,7 @@ function createEmptySpecialMenu()
         -- Close button - styled like main menu luxury X (only on front side)
         if not isBackSide then
             local close = makeLuxuryX(root, {size = 30, lineLen = 12, thick = 2})
-            close.Position = UDim2.new(1, -35, 0, 5)
+            close.Position = UDim2.new(1, -35, 0, 22)
             close.MouseButton1Click:Connect(function()
                 toggleSpecialFeaturesMenu()
             end)
@@ -8057,13 +8610,13 @@ function createEmptySpecialMenu()
         spawnTitle.TextXAlignment = Enum.TextXAlignment.Left
         spawnTitle.Parent = spawnSection
 
-        -- Invisible v1 action button (toggles the ghost-walker)
+        -- Dsink v1 action button (toggles the ghost-walker)
         local invBtn = Instance.new("TextButton")
-        invBtn.Size = UDim2.new(0.62, -4, 0, 30)
+        invBtn.Size = UDim2.new(0.52, -4, 0, 30)
         invBtn.Position = UDim2.new(0, 0, 0, 30)
         invBtn.BackgroundColor3 = C.BLACK
         invBtn.BackgroundTransparency = 0.2
-        invBtn.Text = inv_isActive and "Return to Body" or "Invisible v1"
+        invBtn.Text = inv_isActive and "Return to Body" or "Dsink v1"
         invBtn.TextColor3 = C.WHITE
         invBtn.Font = FONT_BOLD
         invBtn.TextSize = 12
@@ -8076,13 +8629,13 @@ function createEmptySpecialMenu()
         end
         invBtn.MouseButton1Click:Connect(function()
             invToggle()
-            invBtn.Text = inv_isActive and "Return to Body" or "Invisible v1"
+            invBtn.Text = inv_isActive and "Return to Body" or "Dsink v1"
         end)
 
         -- Bind button — click, then press a key to rebind
         local bindBtn = Instance.new("TextButton")
-        bindBtn.Size = UDim2.new(0.38, -4, 0, 30)
-        bindBtn.Position = UDim2.new(0.62, 4, 0, 30)
+        bindBtn.Size = UDim2.new(0.32, -4, 0, 30)
+        bindBtn.Position = UDim2.new(0.52, 4, 0, 30)
         bindBtn.BackgroundColor3 = C.BLACK
         bindBtn.BackgroundTransparency = 0.2
         bindBtn.Text = invBindLabel()
@@ -8116,6 +8669,158 @@ function createEmptySpecialMenu()
                     bindBtn.Text = "Bind: " .. name
                 end)
             end)
+        end)
+
+        -- Ползунок (iOS-style, как у Autoexec на обратной стороне Main) справа от Bind —
+        -- включает/выключает работу бинда Dsink v1.
+        -- Состояние хранится в SkinChanger_Settings под ключом invisibleBindEnabledEnc
+        -- (зашифровано invEncodeEnabled: XOR + rolling hash сигнатура) — ручная правка
+        -- файла настроек не даст включить функцию, т.к. сигнатура не совпадёт.
+        local bindToggleBg = Instance.new("TextButton")
+        bindToggleBg.Size = UDim2.fromOffset(50, 26)
+        bindToggleBg.Position = UDim2.new(1, -52, 0, 32)
+        bindToggleBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        bindToggleBg.BackgroundTransparency = 0
+        bindToggleBg.BorderSizePixel = 0
+        bindToggleBg.Text = ""
+        bindToggleBg.AutoButtonColor = false
+        bindToggleBg.Parent = spawnSection
+        local bindToggleCorner = Instance.new("UICorner")
+        bindToggleCorner.CornerRadius = UDim.new(0, 13)
+        bindToggleCorner.Parent = bindToggleBg
+
+        local bindToggleThumb = Instance.new("Frame")
+        bindToggleThumb.Size = UDim2.fromOffset(22, 22)
+        bindToggleThumb.Position = UDim2.fromOffset(2, 2)
+        bindToggleThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        bindToggleThumb.BorderSizePixel = 0
+        bindToggleThumb.Parent = bindToggleBg
+        local bindThumbCorner = Instance.new("UICorner")
+        bindThumbCorner.CornerRadius = UDim.new(0, 11)
+        bindThumbCorner.Parent = bindToggleThumb
+
+        local function updateBindToggleState(enabled, instant)
+            local t = instant and 0.01 or 0.3
+            if enabled then
+                tween(bindToggleThumb, t, {Position = UDim2.fromOffset(26, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                -- Зелёный вместо Theme.primary — чтобы на белой теме ползунок не сливался
+                tween(bindToggleBg, t, {BackgroundColor3 = Color3.fromRGB(76, 175, 80)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            else
+                tween(bindToggleThumb, t, {Position = UDim2.fromOffset(2, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(bindToggleBg, t, {BackgroundColor3 = Color3.fromRGB(60, 60, 60)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            end
+        end
+        updateBindToggleState(invGetBindEnabled(), true)
+
+        bindToggleBg.MouseButton1Click:Connect(function()
+            local newState = not invGetBindEnabled()
+            invSetBindEnabled(newState)
+            updateBindToggleState(newState)
+        end)
+
+        ----------------------------------------------------------------
+        -- ESP row (второй ряд): кнопка Esp | Bind | ползунок вкл/выкл
+        -- Головы всех игроков подсвечиваются нежно-белым сквозь стены.
+        ----------------------------------------------------------------
+        local espBtn = Instance.new("TextButton")
+        espBtn.Size = UDim2.new(0.52, -4, 0, 30)
+        espBtn.Position = UDim2.new(0, 0, 0, 66)
+        espBtn.BackgroundColor3 = C.BLACK
+        espBtn.BackgroundTransparency = 0.2
+        espBtn.Text = espIsActive() and "Esp: ON" or "Esp"
+        espBtn.TextColor3 = C.WHITE
+        espBtn.Font = FONT_BOLD
+        espBtn.TextSize = 12
+        espBtn.AutoButtonColor = false
+        espBtn.Parent = spawnSection
+        wmCorner(espBtn, 6)
+        wmStroke(espBtn, Theme.primary, 1, 0.5)
+        if not isBackSide then
+            espActionBtnRef = espBtn
+        end
+        espBtn.MouseButton1Click:Connect(function()
+            espToggle()
+            espBtn.Text = espIsActive() and "Esp: ON" or "Esp"
+        end)
+
+        local espBindBtn = Instance.new("TextButton")
+        espBindBtn.Size = UDim2.new(0.32, -4, 0, 30)
+        espBindBtn.Position = UDim2.new(0.52, 4, 0, 66)
+        espBindBtn.BackgroundColor3 = C.BLACK
+        espBindBtn.BackgroundTransparency = 0.2
+        espBindBtn.Text = espBindLabel()
+        espBindBtn.TextColor3 = C.WHITE
+        espBindBtn.Font = FONT_BOLD
+        espBindBtn.TextSize = 12
+        espBindBtn.AutoButtonColor = false
+        espBindBtn.Parent = spawnSection
+        wmCorner(espBindBtn, 6)
+        wmStroke(espBindBtn, Theme.primary, 1, 0.5)
+
+        espBindBtn.MouseButton1Click:Connect(function()
+            if esp_awaitingBind then return end
+            esp_awaitingBind = true
+            espBindBtn.Text = "Press key..."
+            task.spawn(function()
+                local capture
+                capture = UserInputService.InputBegan:Connect(function(input, gp)
+                    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+                    if input.KeyCode == Enum.KeyCode.Unknown then return end
+                    if input.KeyCode == Enum.KeyCode.Escape then
+                        capture:Disconnect()
+                        esp_awaitingBind = false
+                        espBindBtn.Text = espBindLabel()
+                        return
+                    end
+                    local name = input.KeyCode.Name
+                    espSetBind(name)
+                    capture:Disconnect()
+                    esp_awaitingBind = false
+                    espBindBtn.Text = "Bind: " .. name
+                end)
+            end)
+        end)
+
+        -- Ползунок ESP (iOS-style), состояние шифруется как у Dsink v1 (espBindEnabledEnc)
+        local espToggleBg = Instance.new("TextButton")
+        espToggleBg.Size = UDim2.fromOffset(50, 26)
+        espToggleBg.Position = UDim2.new(1, -52, 0, 68)
+        espToggleBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        espToggleBg.BackgroundTransparency = 0
+        espToggleBg.BorderSizePixel = 0
+        espToggleBg.Text = ""
+        espToggleBg.AutoButtonColor = false
+        espToggleBg.Parent = spawnSection
+        local espToggleCorner = Instance.new("UICorner")
+        espToggleCorner.CornerRadius = UDim.new(0, 13)
+        espToggleCorner.Parent = espToggleBg
+
+        local espToggleThumb = Instance.new("Frame")
+        espToggleThumb.Size = UDim2.fromOffset(22, 22)
+        espToggleThumb.Position = UDim2.fromOffset(2, 2)
+        espToggleThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        espToggleThumb.BorderSizePixel = 0
+        espToggleThumb.Parent = espToggleBg
+        local espThumbCorner = Instance.new("UICorner")
+        espThumbCorner.CornerRadius = UDim.new(0, 11)
+        espThumbCorner.Parent = espToggleThumb
+
+        local function updateEspToggleState(enabled, instant)
+            local t = instant and 0.01 or 0.3
+            if enabled then
+                tween(espToggleThumb, t, {Position = UDim2.fromOffset(26, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(espToggleBg, t, {BackgroundColor3 = Color3.fromRGB(76, 175, 80)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            else
+                tween(espToggleThumb, t, {Position = UDim2.fromOffset(2, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(espToggleBg, t, {BackgroundColor3 = Color3.fromRGB(60, 60, 60)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            end
+        end
+        updateEspToggleState(espGetBindEnabled(), true)
+
+        espToggleBg.MouseButton1Click:Connect(function()
+            local newState = not espGetBindEnabled()
+            espSetBindEnabled(newState)
+            updateEspToggleState(newState)
         end)
 
     end
@@ -8995,7 +9700,7 @@ function buildSettingsContent(sg, onDragStart, onDragInput, onDragEnd)
     -- ===== 5. SHADERPACK =====
     local s5 = makeSection(5, "Shaderpack", true)
     do
-        local presetOrder2 = {"Sunset", "Night"}
+        local presetOrder2 = {"Sunset", "Night", "Amethyst", "ObsidianMist"}
         local presetBtns2 = {}
         local function refreshPresets2()
             for name, btn in pairs(presetBtns2) do
@@ -9739,7 +10444,23 @@ showGlassesWorldMenus = function()
         
     end
     buildPanels()
-    
+
+    -- Восстанавливаем Special Features, если меню было открыто до Hide.
+    -- Панель уничтожается вместе с остальными worldPanels при hideGlassesWorldMenus,
+    -- но specialMenuOpen/specialMenuAuthenticated сохраняются — пересоздаём без
+    -- повторного ввода пароля (если пользователь уже аутентифицировался).
+    if specialMenuOpen then
+        if specialMenuAuthenticated then
+            if not (emptySpecialMenuPart and emptySpecialMenuPart.Parent) then
+                pcall(createEmptySpecialMenu)
+            end
+        else
+            if not (specialMenuPart and specialMenuPart.Parent) then
+                pcall(createPasswordMenu)
+            end
+        end
+    end
+
     -- Shatter Reverse: shards fly in and assemble the panel
     task.spawn(function()
         if #worldPanels == 0 then return end
@@ -9966,12 +10687,16 @@ rebuildWorldPanels = function()
     -- НЕ трогаем g_anchorForward (точка крепления остаётся)
     buildPanels()
 
-    -- Restore Special Features menu if it was open
+    -- Restore Special Features menu if it was open.
+    -- ВАЖНО: проверяем .Parent, а не == nil — buildPanels() уничтожает part,
+    -- но ссылка остаётся не-nil, из-за чего меню не пересоздавалось при смене темы.
     if specialWasOpen then
-        if specialWasAuthenticated and emptySpecialMenuPart == nil then
-            createEmptySpecialMenu()
-        elseif not specialWasAuthenticated and specialMenuPart == nil then
-            createPasswordMenu()
+        if specialWasAuthenticated and not (emptySpecialMenuPart and emptySpecialMenuPart.Parent) then
+            emptySpecialMenuPart = nil
+            pcall(createEmptySpecialMenu)
+        elseif not specialWasAuthenticated and not (specialMenuPart and specialMenuPart.Parent) then
+            specialMenuPart = nil
+            pcall(createPasswordMenu)
         end
     end
 end
