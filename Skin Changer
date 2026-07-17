@@ -149,6 +149,9 @@ do
     lightMenu = s.LightMenu == true
     menuKeybindName = s.MenuKeybind or "Insert"
     _G.__SC_hideIcon = s.HideIcon == true  -- через _G чтобы не занимать локал главного chunk
+    -- Low Saved Skins: карточки в Saved рендерятся статичной "картинкой" (без вращения)
+    -- и не перестраиваются при каждом заходе — вместо этого кнопка ⟳ на карточке.
+    _G.__SC_lowSavedSkins = s.LowSavedSkins == true
 end
 -- More Skins toggle: when enabled, saving a skin from a player you already saved
 -- appends a new entry instead of overwriting the existing one. Persisted in
@@ -3696,6 +3699,7 @@ do
             local lm = settingsPage:FindFirstChild("LightMenuRow")
             local kb = settingsPage:FindFirstChild("MenuKeybindRow")
             local hi = settingsPage:FindFirstChild("HideIconRow")
+            local lss = settingsPage:FindFirstChild("LowSavedSkinsRow")
             if lightMenu then
                 if mcr then mcr.Visible = false end
                 if hint then hint.Visible = false end
@@ -3703,6 +3707,7 @@ do
                 if lm then lm.Position = UDim2.new(0, 10, 0, 90) end
                 if kb then kb.Position = UDim2.new(0, 10, 0, 170) end
                 if hi then hi.Position = UDim2.new(0, 10, 0, 250) end
+                if lss then lss.Position = UDim2.new(0, 10, 0, 330) end
             else
                 if mcr then mcr.Visible = true end
                 if hint then hint.Visible = true end
@@ -3710,6 +3715,7 @@ do
                 if lm then lm.Position = UDim2.new(0, 10, 0, 170) end
                 if kb then kb.Position = UDim2.new(0, 10, 0, 250) end
                 if hi then hi.Position = UDim2.new(0, 10, 0, 330) end
+                if lss then lss.Position = UDim2.new(0, 10, 0, 410) end
             end
         end
         -- moveIndicator to current page (правит позицию индикатора при смене nav-размера)
@@ -4270,12 +4276,19 @@ end
 ----------------------------------------------------------------
 -- SETTINGS PAGE
 ----------------------------------------------------------------
-local settingsPage = Instance.new("Frame")
+local settingsPage = Instance.new("ScrollingFrame")
 settingsPage.Size = UDim2.new(1, 0, 1, 0)
 settingsPage.BackgroundTransparency = 1
+settingsPage.BorderSizePixel = 0
+settingsPage.ScrollBarThickness = 3
+settingsPage.ScrollBarImageColor3 = Theme.primary
+settingsPage.ScrollBarImageTransparency = 0.4
+settingsPage.CanvasSize = UDim2.new(0, 0, 0, 0)
+settingsPage.AutomaticCanvasSize = Enum.AutomaticSize.Y
 settingsPage.Visible = false
 settingsPage.ZIndex = 2
 settingsPage.Parent = pagesArea
+onTheme(function(t) settingsPage.ScrollBarImageColor3 = t.primary end)
 
 -- MENU PAGE (light-mode only). ScrollingFrame кладём в pagesArea:MenuPage,
 -- ссылаемся через FindFirstChild — не занимает local в главном chunk (лимит 200).
@@ -5028,9 +5041,91 @@ do
     end)
 end
 
+-- LOW SAVED SKINS карточка: статичные превью в Saved без вращения + ручное обновление
+-- карточек кнопкой ⟳. Состояние в SkinChanger_Settings.LowSavedSkins.
+do
+    local row = Instance.new("Frame")
+    row.Name = "LowSavedSkinsRow"
+    row.Size = UDim2.new(1, -20, 0, 70)
+    row.Position = UDim2.new(0, 10, 0, 410)
+    row.BackgroundColor3 = C.BG_CARD
+    row.BackgroundTransparency = 0.05
+    row.BorderSizePixel = 0
+    row.ZIndex = 2
+    row.Parent = settingsPage
+    corner(row, 10)
+    themeStrokeC(stroke(row, Theme.dark, 1, 0.45), "dark")
+
+    local ac = Instance.new("Frame")
+    ac.Size = UDim2.fromOffset(3, 30)
+    ac.Position = UDim2.new(0, 14, 0.5, -15)
+    ac.BackgroundColor3 = Theme.primary
+    ac.BorderSizePixel = 0
+    ac.ZIndex = 3
+    ac.Parent = row
+    corner(ac, 2)
+    themeBg(ac, "primary")
+
+    local t = Instance.new("TextLabel")
+    t.Position = UDim2.new(0, 28, 0, 14)
+    t.Size = UDim2.new(0, 240, 0, 18)
+    t.BackgroundTransparency = 1
+    t.Text = "LOW SAVED SKINS"
+    t.TextColor3 = C.TEXT
+    t.TextSize = 14
+    t.Font = FONT_BOLD
+    t.TextXAlignment = Enum.TextXAlignment.Left
+    t.ZIndex = 3
+    t.Parent = row
+
+    local d = Instance.new("TextLabel")
+    d.Position = UDim2.new(0, 28, 0, 36)
+    d.Size = UDim2.new(0, 360, 0, 16)
+    d.BackgroundTransparency = 1
+    d.Text = "Static skin previews in Saved (no rotation, refresh manually)"
+    d.TextColor3 = C.TEXT_MUTE
+    d.TextSize = 11
+    d.Font = FONT_REG
+    d.TextXAlignment = Enum.TextXAlignment.Left
+    d.ZIndex = 3
+    d.Parent = row
+
+    local b = Instance.new("TextButton")
+    b.AnchorPoint = Vector2.new(1, 0.5)
+    b.Position = UDim2.new(1, -16, 0.5, 0)
+    b.Size = UDim2.fromOffset(110, 36)
+    b.BackgroundColor3 = C.BG_PANEL2
+    b.Text = _G.__SC_lowSavedSkins and "ENABLED" or "DISABLED"
+    b.TextColor3 = C.TEXT_DIM
+    b.TextSize = 11
+    b.Font = FONT_BOLD
+    b.AutoButtonColor = false
+    b.BorderSizePixel = 0
+    b.ZIndex = 3
+    b.Parent = row
+    corner(b, 8)
+    stroke(b, C.TEXT_MUTE, 1, 0.6)
+    b.MouseEnter:Connect(function()
+        tween(b, 0.15, {BackgroundColor3 = C.BG_CARD_H, TextColor3 = C.TEXT})
+    end)
+    b.MouseLeave:Connect(function()
+        tween(b, 0.15, {BackgroundColor3 = C.BG_PANEL2, TextColor3 = C.TEXT_DIM})
+    end)
+    b.MouseButton1Click:Connect(function()
+        _G.__SC_lowSavedSkins = not _G.__SC_lowSavedSkins
+        b.Text = _G.__SC_lowSavedSkins and "ENABLED" or "DISABLED"
+        pcall(function() scUpdateSetting("LowSavedSkins", _G.__SC_lowSavedSkins) end)
+        -- Полная перестройка Saved под новый режим
+        pcall(function()
+            savedContainer:SetAttribute("__builtOnce", false)
+            if currentPage == "saved" and updateSavedSkinsList then updateSavedSkinsList(true) end
+        end)
+    end)
+end
+
 local hintLabel = Instance.new("TextLabel")
-hintLabel.AnchorPoint = Vector2.new(0.5, 1)
-hintLabel.Position = UDim2.new(0.5, 0, 1, -8)
+hintLabel.AnchorPoint = Vector2.new(0.5, 0)
+hintLabel.Position = UDim2.new(0.5, 0, 0, 490)
 hintLabel.Size = UDim2.new(1, -20, 0, 16)
 hintLabel.BackgroundTransparency = 1
 hintLabel.Text = "Click to toggle the colour palette  ·  pick any swatch to recolour the menu"
@@ -5856,6 +5951,129 @@ function createSavedCard(skinData, index)
     deleteBtn.Position = UDim2.new(1, -32, 0, 14)
     deleteBtn.ZIndex = 5
 
+    -- LOW SAVED SKINS: статичная "картинка" — убираем вращение (DragCatcher)
+    -- и добавляем кнопку ⟳ слева сверху для ручного обновления карточки.
+    if _G.__SC_lowSavedSkins then
+        if viewport and viewport.Parent then
+            pcall(function()
+                local catcher = viewport:FindFirstChild("DragCatcher")
+                if catcher then catcher:Destroy() end
+                local oldConns = uiConnections[viewport]
+                if oldConns then
+                    pcall(function() oldConns.move:Disconnect() end)
+                    pcall(function() oldConns.endConn:Disconnect() end)
+                    uiConnections[viewport] = nil
+                end
+            end)
+        end
+
+        local refreshBtn = Instance.new("TextButton")
+        refreshBtn.Name = "RefreshButton"
+        refreshBtn.Size = UDim2.fromOffset(24, 24)
+        refreshBtn.Position = UDim2.new(0, 14, 0, 14)
+        refreshBtn.BackgroundColor3 = C.BG_PANEL
+        refreshBtn.BackgroundTransparency = 0.25
+        refreshBtn.Text = ""
+        refreshBtn.AutoButtonColor = false
+        refreshBtn.BorderSizePixel = 0
+        refreshBtn.ZIndex = 5
+        refreshBtn.Parent = card
+        corner(refreshBtn, 12)
+        local rStroke = stroke(refreshBtn, Theme.primary, 1, 0.5)
+        themeStrokeC(rStroke, "primary")
+
+        -- Своя иконка ↻: кольцо + стрелка, цвет следует за темой меню
+        local rHovered = false
+        local icon = Instance.new("Frame")
+        icon.Name = "RefreshIcon"
+        icon.AnchorPoint = Vector2.new(0.5, 0.5)
+        icon.Position = UDim2.fromScale(0.5, 0.5)
+        icon.Size = UDim2.fromOffset(12, 12)
+        icon.BackgroundTransparency = 1
+        icon.ZIndex = 6
+        icon.Parent = refreshBtn
+
+        local ring = Instance.new("Frame")
+        ring.AnchorPoint = Vector2.new(0.5, 0.5)
+        ring.Position = UDim2.fromScale(0.5, 0.5)
+        ring.Size = UDim2.fromOffset(10, 10)
+        ring.BackgroundTransparency = 1
+        ring.ZIndex = 6
+        ring.Parent = icon
+        corner(ring, 5)
+        local ringStroke = stroke(ring, Theme.primary, 1.6, 0)
+
+        -- Стрелка (наконечник) поверх кольца — две короткие линии углом,
+        -- указывают по часовой (верхний правый край кольца)
+        local function makeArrowLine(rotation, posX, posY)
+            local line = Instance.new("Frame")
+            line.AnchorPoint = Vector2.new(0.5, 0.5)
+            line.Position = UDim2.new(0, posX, 0, posY)
+            line.Size = UDim2.fromOffset(5, 1.6)
+            line.BackgroundColor3 = Theme.primary
+            line.BorderSizePixel = 0
+            line.Rotation = rotation
+            line.ZIndex = 7
+            line.Parent = icon
+            corner(line, 1)
+            return line
+        end
+        local arrowA = makeArrowLine(30, 11, 2)   -- верхняя грань наконечника
+        local arrowB = makeArrowLine(-60, 10, 4)  -- нижняя грань наконечника
+
+        onTheme(function(t)
+            if not rHovered then
+                ringStroke.Color = t.primary
+                arrowA.BackgroundColor3 = t.primary
+                arrowB.BackgroundColor3 = t.primary
+            end
+        end)
+
+        refreshBtn.MouseEnter:Connect(function()
+            rHovered = true
+            tween(refreshBtn, 0.15, {BackgroundTransparency = 0.05})
+            tween(rStroke, 0.15, {Transparency = 0.1})
+            tween(ringStroke, 0.15, {Color = C.WHITE})
+            tween(arrowA, 0.15, {BackgroundColor3 = C.WHITE})
+            tween(arrowB, 0.15, {BackgroundColor3 = C.WHITE})
+            tween(icon, 0.25, {Rotation = 90})
+        end)
+        refreshBtn.MouseLeave:Connect(function()
+            rHovered = false
+            tween(refreshBtn, 0.15, {BackgroundTransparency = 0.25})
+            tween(rStroke, 0.15, {Transparency = 0.5})
+            tween(ringStroke, 0.15, {Color = Theme.primary})
+            tween(arrowA, 0.15, {BackgroundColor3 = Theme.primary})
+            tween(arrowB, 0.15, {BackgroundColor3 = Theme.primary})
+            tween(icon, 0.25, {Rotation = 0})
+        end)
+        -- Перестраиваем ТОЛЬКО эту карточку (скин не трогаем, тем более не удаляем)
+        refreshBtn.MouseButton1Click:Connect(function()
+            -- Анимация вращения на время перестройки
+            local spinConn = RunService.RenderStepped:Connect(function(dt)
+                if icon and icon.Parent then
+                    icon.Rotation = icon.Rotation + dt * 360
+                end
+            end)
+            task.spawn(function()
+                local parent = card.Parent
+                local order = card.LayoutOrder
+                -- Актуальный индекс скина (порядок мог измениться)
+                local idx = order
+                for i, s in ipairs(savedSkins) do
+                    if s == skinData then idx = i; break end
+                end
+                local ok, newCard = pcall(createSavedCard, skinData, idx)
+                pcall(function() spinConn:Disconnect() end)
+                if ok and newCard and parent then
+                    newCard.LayoutOrder = order
+                    newCard.Parent = parent
+                    card:Destroy()
+                end
+            end)
+        end)
+    end
+
     local nameLabel = Instance.new("TextLabel")
     nameLabel.Name = "NameLabel"
     nameLabel.Size = UDim2.new(1, -16, 0, 18)
@@ -6078,7 +6296,31 @@ function updatePlayersList()
     end
 end
 
-function updateSavedSkinsList()
+function updateSavedSkinsList(force)
+    -- Запоминаем позицию скролла: при перестройке canvas схлопывается и позиция
+    -- сбрасывалась в 0 — пользователю приходилось листать заново.
+    local savedScrollY = savedContainer.CanvasPosition.Y
+    if savedScrollY > 0 then
+        savedContainer:SetAttribute("__lastScrollY", savedScrollY)
+    end
+    local restoreY = savedContainer:GetAttribute("__lastScrollY") or 0
+    -- LOW SAVED SKINS: карточки уже построены и число скинов не изменилось —
+    -- НЕ перестраиваем (тяжёлые манекены). Только empty-state и скролл.
+    if _G.__SC_lowSavedSkins and not force
+        and savedContainer:GetAttribute("__builtOnce")
+        and savedContainer:GetAttribute("__builtCount") == #savedSkins then
+        if currentPage == "saved" then
+            local hasAny = #savedSkins > 0
+            savedContainer.Visible = hasAny
+            savedEmpty.Visible = not hasAny
+        end
+        if restoreY > 0 then
+            task.defer(function()
+                pcall(function() savedContainer.CanvasPosition = Vector2.new(0, restoreY) end)
+            end)
+        end
+        return
+    end
     for _, ch in ipairs(savedContainer:GetChildren()) do
         if ch:IsA("Frame") then ch:Destroy() end
     end
@@ -6103,8 +6345,26 @@ function updateSavedSkinsList()
             if ok and c then
                 c.Parent = savedContainer
             end
+            -- Возвращаем скролл по мере роста canvas (клампится к доступному)
+            if restoreY > 0 then
+                pcall(function()
+                    savedContainer.CanvasPosition = Vector2.new(0, restoreY)
+                end)
+            end
             -- Yield каждые 3 карточки — держим 60fps даже с 100+ слотами.
             if i % 3 == 0 then task.wait() end
+        end
+        -- Финальное восстановление после полного построения
+        if restoreY > 0 and savedContainer:GetAttribute("__buildToken") == myRunToken then
+            task.wait()
+            pcall(function()
+                savedContainer.CanvasPosition = Vector2.new(0, restoreY)
+            end)
+        end
+        -- Отмечаем что карточки построены (для режима Low Saved Skins)
+        if savedContainer:GetAttribute("__buildToken") == myRunToken then
+            savedContainer:SetAttribute("__builtOnce", true)
+            savedContainer:SetAttribute("__builtCount", #savedSkins)
         end
     end)
 end
@@ -7389,6 +7649,9 @@ local inv_conns        = {}
 local inv_savedSitAnims = {}
 local inv_walkTrack, inv_jumpTrack, inv_fallTrack = nil, nil, nil
 local inv_wasMoving, inv_wasGrounded = false, true
+local inv_savedWalkSpeed, inv_savedJumpPower, inv_savedAutoRotate = nil, nil, nil
+local inv_moveLocked = false
+local inv_lockGui = nil
 
 -- Bind storage keyed by current executor. Empty by default (no key bound).
 local DEFAULT_INV_BIND = ""
@@ -7507,6 +7770,9 @@ function invCleanup()
     -- conns and RE-SIT us (checks inv_isActive to decide). Setting it here first
     -- makes those pending defers bail out.
     inv_isActive = false
+    inv_moveLocked = false
+    pcall(function() if inv_lockGui then inv_lockGui:Destroy() end end)
+    inv_lockGui = nil
 
     pcall(function() ContextActionService:UnbindAction("InvBlockJump") end)
 
@@ -7515,10 +7781,21 @@ function invCleanup()
         inv_conns[i] = nil
     end
 
-    -- Stop OUR custom tracks (walk/jump/fall) locally.
-    pcall(function() if inv_walkTrack then inv_walkTrack:Stop(0); inv_walkTrack:Destroy() end end)
-    pcall(function() if inv_jumpTrack then inv_jumpTrack:Stop(0); inv_jumpTrack:Destroy() end end)
-    pcall(function() if inv_fallTrack then inv_fallTrack:Stop(0); inv_fallTrack:Destroy() end end)
+    -- Stop OUR custom tracks (walk/jump/fall). IMPORTANT: do NOT Destroy
+    -- immediately — Destroy right after Stop can cancel the Stop before it
+    -- replicates, freezing the last pose frame on other clients forever.
+    -- Stop now, destroy after the stop has had time to replicate.
+    do
+        local w, j, f = inv_walkTrack, inv_jumpTrack, inv_fallTrack
+        pcall(function() if w then w:Stop(0) end end)
+        pcall(function() if j then j:Stop(0) end end)
+        pcall(function() if f then f:Stop(0) end end)
+        task.delay(1.5, function()
+            pcall(function() if w then w:Destroy() end end)
+            pcall(function() if j then j:Destroy() end end)
+            pcall(function() if f then f:Destroy() end end)
+        end)
+    end
     inv_walkTrack, inv_jumpTrack, inv_fallTrack = nil, nil, nil
 
     -- Restore original sit animation IDs on the Animate folder BEFORE
@@ -7534,86 +7811,48 @@ function invCleanup()
     local hum  = char and char:FindFirstChildOfClass("Humanoid")
     local hrp  = char and char:FindFirstChild("HumanoidRootPart")
 
-    -- STEP 1: DISABLE the Seated humanoid state entirely. The engine
-    -- immediately kicks the humanoid out of Seated and refuses to enter
-    -- it again while disabled — this replicates to server + all clients
-    -- and is the ONLY method that guarantees the sit pose is dropped
-    -- for every observer, without touching the Animator or Animate script.
+    -- Canonical unsit: Jump=true WHILE still seated makes the engine break
+    -- the weld itself and run the replicated Seated→Jumping→GettingUp chain,
+    -- so every observer's client re-evaluates the pose naturally. Only after
+    -- that do we remove the seat.
+    local seat = inv_driveSeat
+    inv_driveSeat = nil
+
     if hum then
-        pcall(function() hum:SetStateEnabled(Enum.HumanoidStateType.Seated, false) end)
         pcall(function() hum.PlatformStand = false end)
+        pcall(function() hum.Jump = true end)
         pcall(function() hum.Sit = false end)
     end
 
-    -- STEP 2: Destroy seat + weld.
-    local seat = inv_driveSeat
-    inv_driveSeat = nil
-    if seat and seat.Parent then
-        local w = seat:FindFirstChild("SeatWeld")
-        if w then pcall(function() w:Destroy() end) end
-        pcall(function() seat:Destroy() end)
-    end
+    task.delay(0.15, function()
+        if seat and seat.Parent then
+            local w = seat:FindFirstChild("SeatWeld")
+            if w then pcall(function() w:Destroy() end) end
+            pcall(function() seat:Destroy() end)
+        end
+    end)
 
-    if char and hum then
+    if hum then
+        pcall(function()
+            if inv_savedWalkSpeed then hum.WalkSpeed = inv_savedWalkSpeed end
+            if inv_savedJumpPower then
+                if hum.UseJumpPower then hum.JumpPower = inv_savedJumpPower else hum.JumpHeight = inv_savedJumpPower end
+            end
+            if inv_savedAutoRotate ~= nil then hum.AutoRotate = inv_savedAutoRotate end
+        end)
+        inv_savedWalkSpeed, inv_savedJumpPower, inv_savedAutoRotate = nil, nil, nil
+
         workspace.CurrentCamera.CameraSubject = hum
 
-        -- STEP 3: Canonical exit from Seated. Replicates to server.
-        pcall(function() hum:ChangeState(Enum.HumanoidStateType.GettingUp) end)
-        pcall(function() hum.Jump = true end)
-
-        -- STEP 4: Stop any lingering sit-name tracks on the Animator.
+        -- Stop any of OUR tracks still registered on the Animator.
         local animator = hum:FindFirstChildOfClass("Animator")
-        if not animator then
-            animator = Instance.new("Animator")
-            animator.Parent = hum
-        end
-        for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
-            local nm = ""
-            pcall(function() nm = tr.Name or (tr.Animation and tr.Animation.Name) or "" end)
-            if nm == "SitAnim" or nm:lower():find("sit") then
+        if animator then
+            for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
                 pcall(function() tr:Stop(0) end)
             end
         end
 
-        -- STEP 5: VISUAL OVERRIDE — this is the actual fix for the
-        -- "other players see me sitting" problem. Even after Sit=false,
-        -- Jump, and SetStateEnabled, a lingering sit-pose animation
-        -- track can remain queued on the Animator's replication buffer
-        -- (we cannot un-send it, only override it). We load and play
-        -- the game's own idle animation at Action4 priority — the
-        -- highest priority — so it visually overrides ANY leftover
-        -- sit pose on every observing client. Then we stop it after
-        -- ~1s so Animate LocalScript resumes normal control.
-        local animate = char:FindFirstChild("Animate")
-        local idleId = invGetAnimIdFromScript(animate, "idle", "rbxassetid://507766388")
-
-        local overrideTrack = nil
-        pcall(function()
-            local a = Instance.new("Animation")
-            a.AnimationId = idleId
-            overrideTrack = animator:LoadAnimation(a)
-            if overrideTrack then
-                overrideTrack.Priority = Enum.AnimationPriority.Action4
-                overrideTrack.Looped = true
-                overrideTrack:Play(0.1)
-            end
-        end)
-
-        task.delay(1.0, function()
-            pcall(function()
-                if overrideTrack then
-                    overrideTrack:Stop(0.2)
-                    task.delay(0.3, function()
-                        pcall(function() if overrideTrack then overrideTrack:Destroy() end end)
-                    end)
-                end
-            end)
-            local ch = player.Character
-            local h  = ch and ch:FindFirstChildOfClass("Humanoid")
-            if h then
-                pcall(function() h:SetStateEnabled(Enum.HumanoidStateType.Seated, true) end)
-            end
-        end)
+        pcall(function() hum:ChangeState(Enum.HumanoidStateType.Freefall) end)
     end
 
     inv_velY, inv_currentVelX, inv_currentVelZ = 0, 0, 0
@@ -7640,6 +7879,47 @@ function invActivate()
     inv_isActive = true
     inv_savedCF = hrp.CFrame
 
+    -- 1-second full movement lock with a bottom-left countdown.
+    inv_moveLocked = true
+    pcall(function() if inv_lockGui then inv_lockGui:Destroy() end end)
+    inv_lockGui = nil
+    pcall(function()
+        local gui = Instance.new("ScreenGui")
+        gui.Name = "InvLockCountdown"
+        gui.ResetOnSpawn = false
+        gui.IgnoreGuiInset = true
+        gui.Parent = player:WaitForChild("PlayerGui")
+
+        local lbl = Instance.new("TextLabel")
+        lbl.Name = "Count"
+        lbl.AnchorPoint = Vector2.new(0, 1)
+        lbl.Position = UDim2.new(0, 20, 1, -20)
+        lbl.Size = UDim2.new(0, 120, 0, 50)
+        lbl.BackgroundTransparency = 1
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 40
+        lbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        lbl.TextStrokeTransparency = 0.4
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.Text = "1.00"
+        lbl.Parent = gui
+        inv_lockGui = gui
+
+        task.spawn(function()
+            local remaining = 1.0
+            while remaining > 0 and inv_isActive do
+                lbl.Text = string.format("%.2f", remaining)
+                local dt2 = task.wait()
+                remaining = remaining - dt2
+            end
+            inv_moveLocked = false
+            pcall(function() gui:Destroy() end)
+            if inv_lockGui == gui then inv_lockGui = nil end
+        end)
+    end)
+    -- Fallback: even if GUI creation failed, unlock after 1s.
+    task.delay(1.0, function() inv_moveLocked = false end)
+
     local rayParams = RaycastParams.new()
     rayParams.FilterType = Enum.RaycastFilterType.Exclude
     rayParams.FilterDescendantsInstances = {char}
@@ -7649,6 +7929,35 @@ function invActivate()
         inv_seatToGround = (hrp.Position.Y - 1.5) - initRay.Position.Y
     else
         inv_seatToGround = 1.5
+    end
+
+    -- PRE-SIT FIX: swap the sit animation IDs to the idle clip BEFORE the
+    -- character ever sits. Animate resolves the sit clip at the moment the
+    -- Seated state begins, so if the swap happens first, the "sit" pose
+    -- that replicates to the server and other players is actually the idle
+    -- animation — nobody ever sees a seated/half-seated pose at all.
+    do
+        local animate = char:FindFirstChild("Animate")
+        if animate then
+            local idleId = invGetAnimIdFromScript(animate, "idle", "rbxassetid://507766666")
+            local sitFolder = animate:FindFirstChild("sit")
+            if sitFolder then
+                for _, obj in ipairs(sitFolder:GetChildren()) do
+                    if obj:IsA("Animation") then
+                        inv_savedSitAnims[obj] = obj.AnimationId
+                        obj.AnimationId = idleId
+                    end
+                end
+            end
+        end
+        -- Also pre-stop whatever is playing so the blend into "sit" (idle)
+        -- starts from a clean slate.
+        local animator = hum:FindFirstChildOfClass("Animator")
+        if animator then
+            for _, tr in ipairs(animator:GetPlayingAnimationTracks()) do
+                pcall(function() tr:Stop(0) end)
+            end
+        end
     end
 
     local seat = Instance.new("VehicleSeat")
@@ -7688,23 +7997,6 @@ function invActivate()
     task.delay(0.4, function()
         if not inv_isActive then return end
         local animate = char:FindFirstChild("Animate")
-        if animate then
-            local idleId = invGetAnimIdFromScript(animate, "idle", "rbxassetid://507766666")
-            local sitFolder = animate:FindFirstChild("sit")
-            if sitFolder then
-                for _, obj in ipairs(sitFolder:GetChildren()) do
-                    if obj:IsA("Animation") then
-                        inv_savedSitAnims[obj] = obj.AnimationId
-                        obj.AnimationId = idleId
-                    end
-                end
-            end
-            animate.Disabled = true
-            task.wait(0.1)
-            if not inv_isActive then return end
-            animate.Disabled = false
-        end
-
         local animator = hum:FindFirstChildOfClass("Animator")
         if not animator then
             animator = Instance.new("Animator")
@@ -7756,10 +8048,12 @@ function invActivate()
         local right = cam.CFrame.RightVector
 
         local inputDir = Vector3.new(0, 0, 0)
-        if UserInputService:IsKeyDown(Enum.KeyCode.W) then inputDir = inputDir + look  end
-        if UserInputService:IsKeyDown(Enum.KeyCode.S) then inputDir = inputDir - look  end
-        if UserInputService:IsKeyDown(Enum.KeyCode.A) then inputDir = inputDir - right end
-        if UserInputService:IsKeyDown(Enum.KeyCode.D) then inputDir = inputDir + right end
+        if not inv_moveLocked then
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then inputDir = inputDir + look  end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then inputDir = inputDir - look  end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then inputDir = inputDir - right end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then inputDir = inputDir + right end
+        end
         inputDir = Vector3.new(inputDir.X, 0, inputDir.Z)
 
         local wantsToMove = inputDir.Magnitude > 0.01
@@ -7799,7 +8093,7 @@ function invActivate()
             inv_velY = inv_velY - INV_GRAVITY * dt
         end
 
-        if grounded and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
+        if grounded and not inv_moveLocked and UserInputService:IsKeyDown(Enum.KeyCode.Space) then
             inv_velY = INV_JUMP_FORCE
         end
 
@@ -7863,25 +8157,22 @@ function invActivate()
         inv_wasGrounded = grounded
     end)
 
-    inv_conns[#inv_conns + 1] = hum:GetPropertyChangedSignal("Sit"):Connect(function()
-        if not hum.Sit and inv_isActive then
-            task.defer(function()
-                if not inv_isActive then return end
-                if not inv_driveSeat or not inv_driveSeat.Parent then return end
-                local currentHRP = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
-                if not currentHRP then return end
-                local existingW = inv_driveSeat:FindFirstChild("SeatWeld")
-                if not existingW then
-                    local w = Instance.new("Weld")
-                    w.Name = "SeatWeld"
-                    w.Part0 = inv_driveSeat
-                    w.Part1 = currentHRP
-                    w.C0 = CFrame.new(0, 0, 0)
-                    w.C1 = CFrame.new(0, -1.5, 0)
-                    w.Parent = inv_driveSeat
-                end
-                hum.Sit = true
-            end)
+    -- Re-create the holding weld if anything (game scripts, physics) breaks it.
+    inv_conns[#inv_conns + 1] = RunService.Heartbeat:Connect(function()
+        if not inv_isActive then return end
+        if not inv_driveSeat or not inv_driveSeat.Parent then return end
+        if not inv_driveSeat:FindFirstChild("SeatWeld") then
+            local currentHRP = player.Character and player.Character:FindFirstChild("HumanoidRootPart")
+            if not currentHRP then return end
+            local w2 = Instance.new("Weld")
+            w2.Name = "SeatWeld"
+            w2.Part0 = inv_driveSeat
+            w2.Part1 = currentHRP
+            w2.C0 = CFrame.new(0, 0, 0)
+            w2.C1 = CFrame.new(0, -1.5, 0)
+            w2.Parent = inv_driveSeat
+            local h = player.Character and player.Character:FindFirstChildOfClass("Humanoid")
+            if h then pcall(function() h.Sit = true end) end
         end
     end)
 
@@ -8058,6 +8349,607 @@ espActionBtnRef = nil
 
 invActionBtnRef = nil
 inv_awaitingBind = false
+
+----------------------------------------------------------------
+-- GHOST MODE MODULE (Special Features)
+-- Полёт призрака: полупрозрачный Neon-персонаж, свет, трейлы,
+-- spring-анимация конечностей, WASD-полёт. Адаптация GhostMode v2.
+-- Бинд + шифрованный флаг — та же схема, что у Dsink v1 / ESP.
+----------------------------------------------------------------
+ghostActionBtnRef = nil
+ghost_awaitingBind = false
+
+function ghostGetBind()
+    local s = scReadSettings()
+    local binds = s.ghostBinds
+    if type(binds) ~= "table" then return "" end
+    local v = binds[invGetExecutorKey()]
+    if v == nil then return "" end
+    return tostring(v)
+end
+
+function ghostBindLabel()
+    local b = ghostGetBind()
+    if b == "" then return "Bind: None" end
+    return "Bind: " .. b
+end
+
+function ghostSetBind(keyName)
+    local s = scReadSettings()
+    if type(s.ghostBinds) ~= "table" then s.ghostBinds = {} end
+    s.ghostBinds[invGetExecutorKey()] = tostring(keyName)
+    scWriteSettings(s)
+end
+
+function ghostGetBindEnabled()
+    local s = scReadSettings()
+    return invDecodeEnabled(s.ghostBindEnabledEnc)
+end
+
+function ghostSetBindEnabled(state)
+    local s = scReadSettings()
+    s.ghostBindEnabledEnc = invEncodeEnabled(state == true)
+    scWriteSettings(s)
+end
+
+do
+    local GHOST_COLOR = Color3.fromRGB(114, 147, 188)
+    local GHOST_TRANSPARENCY = 0.4
+    local GHOST_MATERIAL = Enum.Material.Neon
+    local SPOTLIGHT_COLOR = Color3.fromRGB(132, 116, 255)
+    local POINTLIGHT_COLOR = Color3.fromRGB(128, 183, 255)
+    local GHOST_FACE_ID = "http://www.roblox.com/asset/?id=6821165844"
+    local FLY_SPEED = 65
+    local FLY_ACCEL = 8
+
+    -- Spring (velocity-driven joint animation)
+    local Spring = {}
+    Spring.__index = Spring
+    function Spring.new(damping, speed)
+        return setmetatable({
+            Position = Vector3.new(), Velocity = Vector3.new(),
+            Target = Vector3.new(), Damping = damping, Speed = speed,
+        }, Spring)
+    end
+    function Spring:Update(dt)
+        local disp = self.Position - self.Target
+        local springF = -self.Speed * self.Speed * disp
+        local dampF = -2 * self.Damping * self.Speed * self.Velocity
+        self.Velocity = self.Velocity + (springF + dampF) * dt
+        self.Position = self.Position + self.Velocity * dt
+    end
+
+    local gh_enabled = false
+    local gh_conns = {}
+    local gh_saved = {}
+    local gh_savedFace = nil
+    local gh_added = {}
+    local gh_bv, gh_bg = nil, nil
+    local gh_baseC0 = {}
+    local gh_floatTrack = nil
+
+    local rootSpring = Spring.new(0.55, 7)
+    local llSpring = Spring.new(0.54, 8.5)
+    local rlSpring = Spring.new(0.44, 7.4)
+    local laSpring = Spring.new(0.48, 7.9)
+    local raSpring = Spring.new(0.51, 8.3)
+
+    local function ghParts()
+        local char = player.Character
+        if not char then return nil end
+        local rig = char:FindFirstChild("Rig") or char
+        local hrp = rig:FindFirstChild("HumanoidRootPart") or char:FindFirstChild("HumanoidRootPart")
+        local head = rig:FindFirstChild("Head") or char:FindFirstChild("Head")
+        local hum = rig:FindFirstChildOfClass("Humanoid") or char:FindFirstChildOfClass("Humanoid")
+        local isR15 = (hum and hum.RigType == Enum.HumanoidRigType.R15)
+            or (rig:FindFirstChild("UpperTorso") ~= nil)
+            or (char:FindFirstChild("UpperTorso") ~= nil)
+        local torso, la, ra, ll, rl
+        if isR15 then
+            torso = rig:FindFirstChild("UpperTorso") or char:FindFirstChild("UpperTorso")
+            la = rig:FindFirstChild("LeftUpperArm") or char:FindFirstChild("LeftUpperArm")
+            ra = rig:FindFirstChild("RightUpperArm") or char:FindFirstChild("RightUpperArm")
+            ll = rig:FindFirstChild("LeftUpperLeg") or char:FindFirstChild("LeftUpperLeg")
+            rl = rig:FindFirstChild("RightUpperLeg") or char:FindFirstChild("RightUpperLeg")
+        else
+            torso = rig:FindFirstChild("Torso") or char:FindFirstChild("Torso")
+            la = rig:FindFirstChild("Left Arm") or char:FindFirstChild("Left Arm")
+            ra = rig:FindFirstChild("Right Arm") or char:FindFirstChild("Right Arm")
+            ll = rig:FindFirstChild("Left Leg") or char:FindFirstChild("Left Leg")
+            rl = rig:FindFirstChild("Right Leg") or char:FindFirstChild("Right Leg")
+        end
+        if not (hrp and head and torso) then return nil end
+        return {
+            Char = char, Rig = rig, HRP = hrp, Head = head, Torso = torso,
+            LA = la, RA = ra, LL = ll, RL = rl, Humanoid = hum, IsR15 = isR15,
+        }
+    end
+
+    function ghostEnable()
+        if gh_enabled then return end
+        local p = ghParts()
+        if not p then return end
+        gh_enabled = true
+        gh_saved = {}
+        gh_added = {}
+        gh_baseC0 = {}
+
+        local rig = p.Rig
+        local ghostParts = {} -- {[part] = целевая Transparency}
+
+        local function applyLook(part)
+            if gh_saved[part] == nil then
+                gh_saved[part] = {
+                    Color = part.Color, Material = part.Material,
+                    Transparency = part.Transparency, Reflectance = part.Reflectance,
+                    CastShadow = part.CastShadow,
+                    LocalTransparencyModifier = part.LocalTransparencyModifier,
+                }
+            end
+            -- Изначально невидимые парты (коллизия/хелперы) не красим — иначе
+            -- получаются неоновые квадраты на руках/ногах/голове
+            if gh_saved[part].Transparency > 0.9 or part == p.HRP then
+                part.Transparency = 1
+                ghostParts[part] = 1
+                return
+            end
+            part.Color = GHOST_COLOR
+            part.Material = GHOST_MATERIAL
+            part.Transparency = GHOST_TRANSPARENCY
+            part.LocalTransparencyModifier = 0
+            part.Reflectance = 0.15
+            part.CastShadow = false
+            ghostParts[part] = GHOST_TRANSPARENCY
+        end
+
+        for _, desc in ipairs(rig:GetDescendants()) do
+            if desc:IsA("BasePart") then
+                applyLook(desc)
+            elseif desc:IsA("Decal") and desc.Name ~= "face" then
+                gh_saved[desc] = { Transparency = desc.Transparency }
+                desc.Transparency = 1
+            elseif desc:IsA("Texture") then
+                gh_saved[desc] = { Transparency = desc.Transparency }
+                desc.Transparency = 1
+            end
+        end
+
+        -- Ghost face
+        local face = p.Head:FindFirstChild("face") or p.Head:FindFirstChildOfClass("Decal")
+        if face then
+            gh_savedFace = face.Texture
+            face.Texture = GHOST_FACE_ID
+            face.Transparency = 0.3
+        end
+
+        -- Lights
+        local pointLight = Instance.new("PointLight")
+        pointLight.Name = "GhostPointLight"
+        pointLight.Color = POINTLIGHT_COLOR
+        pointLight.Range = 15
+        pointLight.Brightness = 0.8
+        pointLight.Parent = p.Head
+        table.insert(gh_added, pointLight)
+
+        local spotLight = Instance.new("SpotLight")
+        spotLight.Name = "GhostSpotLight"
+        spotLight.Color = SPOTLIGHT_COLOR
+        spotLight.Range = 25
+        spotLight.Brightness = 0.6
+        spotLight.Angle = 120
+        spotLight.Face = Enum.NormalId.Front
+        spotLight.Parent = p.Torso
+        table.insert(gh_added, spotLight)
+
+        -- Trails на руках
+        for _, armPart in ipairs({p.RA, p.LA}) do
+            if armPart then
+                local att0 = Instance.new("Attachment")
+                att0.Position = Vector3.new(0, 0.8, 0)
+                att0.Parent = armPart
+                table.insert(gh_added, att0)
+                local att1 = Instance.new("Attachment")
+                att1.Position = Vector3.new(0, -0.8, 0)
+                att1.Parent = armPart
+                table.insert(gh_added, att1)
+                local trail = Instance.new("Trail")
+                trail.Name = "GhostTrail"
+                trail.Attachment0 = att0
+                trail.Attachment1 = att1
+                trail.Color = ColorSequence.new(GHOST_COLOR)
+                trail.Transparency = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 0.8),
+                    NumberSequenceKeypoint.new(0.1, 0.2),
+                    NumberSequenceKeypoint.new(1, 1),
+                })
+                trail.Lifetime = 0.6
+                trail.MinLength = 0.05
+                trail.LightEmission = 0.5
+                trail.FaceCamera = true
+                trail.WidthScale = NumberSequence.new({
+                    NumberSequenceKeypoint.new(0, 1),
+                    NumberSequenceKeypoint.new(1, 0.3),
+                })
+                trail.Parent = armPart
+                table.insert(gh_added, trail)
+            end
+        end
+
+        -- Ghost aura particles
+        local aura = Instance.new("ParticleEmitter")
+        aura.Name = "GhostAura"
+        aura.Color = ColorSequence.new({
+            ColorSequenceKeypoint.new(0, Color3.fromRGB(130, 160, 210)),
+            ColorSequenceKeypoint.new(1, Color3.fromRGB(100, 120, 200)),
+        })
+        aura.Transparency = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.6),
+            NumberSequenceKeypoint.new(1, 1),
+        })
+        aura.Size = NumberSequence.new({
+            NumberSequenceKeypoint.new(0, 0.3),
+            NumberSequenceKeypoint.new(0.5, 0.8),
+            NumberSequenceKeypoint.new(1, 0),
+        })
+        aura.Rate = 25
+        aura.Lifetime = NumberRange.new(0.5, 1.2)
+        aura.Speed = NumberRange.new(1, 3)
+        aura.SpreadAngle = Vector2.new(180, 180)
+        aura.LightEmission = 0.4
+        aura.Drag = 3
+        aura.LockedToPart = false
+        aura.Parent = p.Torso
+        table.insert(gh_added, aura)
+
+        -- Stop animations + float-анимация (реплицируется — видна другим)
+        if p.Humanoid then
+            local animator = p.Humanoid:FindFirstChildOfClass("Animator")
+            if not animator then
+                for _, d in ipairs(p.Char:GetDescendants()) do
+                    if d:IsA("Animator") then animator = d break end
+                end
+            end
+            if animator then
+                for _, track in ipairs(animator:GetPlayingAnimationTracks()) do
+                    track:Stop(0)
+                end
+                gh_conns.animBlock = animator.AnimationPlayed:Connect(function(track)
+                    if gh_enabled and track ~= gh_floatTrack then track:Stop(0) end
+                end)
+                local floatIds = p.IsR15
+                    and { "rbxassetid://616006078", "rbxassetid://507784897" }
+                    or  { "rbxassetid://180436148", "rbxassetid://180426354" }
+                for _, id in ipairs(floatIds) do
+                    local anim = Instance.new("Animation")
+                    anim.AnimationId = id
+                    local ok, track = pcall(function() return animator:LoadAnimation(anim) end)
+                    if ok and track then
+                        gh_floatTrack = track
+                        track.Priority = Enum.AnimationPriority.Action
+                        track.Looped = true
+                        track:Play(0.3)
+                        track:AdjustSpeed(0.5)
+                        break
+                    end
+                end
+            end
+        end
+
+        -- Flight
+        if p.Humanoid then p.Humanoid.PlatformStand = true end
+        p.HRP.AssemblyLinearVelocity = Vector3.new()
+        p.HRP.AssemblyAngularVelocity = Vector3.new()
+
+        gh_bv = Instance.new("BodyVelocity")
+        gh_bv.Name = "GhostFly"
+        gh_bv.MaxForce = Vector3.new(math.huge, math.huge, math.huge)
+        gh_bv.Velocity = Vector3.new()
+        gh_bv.Parent = p.HRP
+        table.insert(gh_added, gh_bv)
+
+        gh_bg = Instance.new("BodyGyro")
+        gh_bg.Name = "GhostGyro"
+        gh_bg.MaxTorque = Vector3.new(math.huge, math.huge, math.huge)
+        gh_bg.D = 200
+        gh_bg.P = 10000
+        gh_bg.CFrame = p.HRP.CFrame
+        gh_bg.Parent = p.HRP
+        table.insert(gh_added, gh_bg)
+
+        -- Render loop: полёт + удержание призрачного вида
+        gh_conns.render = RunService.RenderStepped:Connect(function(dt)
+            if not gh_enabled then return end
+            local cp = ghParts()
+            if not cp or not cp.HRP.Parent then return end
+            local camCF = workspace.CurrentCamera.CFrame
+
+            for part, wantT in pairs(ghostParts) do
+                if part.Parent then
+                    part.LocalTransparencyModifier = 0
+                    if part.Transparency ~= wantT then part.Transparency = wantT end
+                    if wantT < 1 then
+                        if part.Color ~= GHOST_COLOR then part.Color = GHOST_COLOR end
+                        if part.Material ~= GHOST_MATERIAL then part.Material = GHOST_MATERIAL end
+                    end
+                else
+                    ghostParts[part] = nil
+                end
+            end
+            local fd = cp.Head:FindFirstChild("face") or cp.Head:FindFirstChildOfClass("Decal")
+            if fd then
+                if fd.Texture ~= GHOST_FACE_ID then fd.Texture = GHOST_FACE_ID end
+                if fd.Transparency > 0.31 then fd.Transparency = 0.3 end
+            end
+
+            local dir = Vector3.new()
+            if UserInputService:IsKeyDown(Enum.KeyCode.W) then dir = dir + camCF.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.S) then dir = dir - camCF.LookVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.A) then dir = dir - camCF.RightVector end
+            if UserInputService:IsKeyDown(Enum.KeyCode.D) then dir = dir + camCF.RightVector end
+            if dir.Magnitude > 0.01 then dir = dir.Unit end
+
+            if gh_bv and gh_bv.Parent then
+                gh_bv.Velocity = gh_bv.Velocity:Lerp(dir * FLY_SPEED, math.clamp(dt * FLY_ACCEL, 0, 1))
+            end
+            if gh_bg and gh_bg.Parent then
+                local look = Vector3.new(camCF.LookVector.X, 0, camCF.LookVector.Z)
+                if look.Magnitude > 0.01 then
+                    gh_bg.CFrame = CFrame.new(cp.HRP.Position, cp.HRP.Position + look)
+                end
+            end
+        end)
+
+        -- Joint animation в Stepped (после записи Animator'а)
+        local wobbleTime = 0
+        gh_conns.stepped = RunService.Stepped:Connect(function(_, dt)
+            if not gh_enabled then return end
+            local cp = ghParts()
+            if not cp or not cp.HRP.Parent then return end
+            local hrp = cp.HRP
+
+            local vel = hrp.AssemblyLinearVelocity
+            if vel.Magnitude > 77 then vel = vel.Unit * 77 end
+            for _, s in ipairs({rootSpring, llSpring, rlSpring, laSpring, raSpring}) do
+                s.Target = vel
+                s:Update(dt)
+            end
+
+            local rotInv = hrp.CFrame.Rotation:Inverse()
+            local rOff = rotInv * (rootSpring.Position + rootSpring.Velocity * 0.5) / 77
+            local llOff = rotInv * (llSpring.Position + llSpring.Velocity * 0.5) / 77
+            local rlOff = rotInv * (rlSpring.Position + rlSpring.Velocity * 0.5) / 77
+            local laOff = rotInv * (laSpring.Position + laSpring.Velocity * 0.5) / 77
+            local raOff = rotInv * (raSpring.Position + raSpring.Velocity * 0.5) / 77
+
+            wobbleTime = wobbleTime + dt
+            local t = wobbleTime
+            local torso = cp.Torso
+
+            if cp.IsR15 then
+                local rootJoint, lh, rh, ls, rs, neck
+                for _, m in ipairs(cp.Rig:GetDescendants()) do
+                    if m:IsA("Motor6D") and m.Part1 then
+                        local n, p1 = m.Name, m.Part1.Name
+                        if n == "Root" or p1 == "LowerTorso" then rootJoint = rootJoint or m
+                        elseif n == "LeftShoulder" or p1 == "LeftUpperArm" then ls = ls or m
+                        elseif n == "RightShoulder" or p1 == "RightUpperArm" then rs = rs or m
+                        elseif n == "LeftHip" or p1 == "LeftUpperLeg" then lh = lh or m
+                        elseif n == "RightHip" or p1 == "RightUpperLeg" then rh = rh or m
+                        elseif n == "Neck" or p1 == "Head" then neck = neck or m
+                        end
+                    end
+                end
+                local function applyC0(joint, wobbleCF)
+                    if not joint then return end
+                    if gh_baseC0[joint] == nil then gh_baseC0[joint] = joint.C0 end
+                    joint.C0 = gh_baseC0[joint] * wobbleCF
+                    joint.Transform = CFrame.new()
+                end
+                applyC0(rootJoint, CFrame.new(
+                    math.noise(0.5, 0, t * 0.8) * 0.08,
+                    math.noise(0, 0.5, t * 0.6) * 0.12 + math.sin(t * 1.2) * 0.05,
+                    math.noise(0.5, 0.5, t * 0.7) * 0.06
+                ) * CFrame.Angles(
+                    math.noise(1, 0, t * 0.5) * 0.04 - rOff.Z * 0.3665,
+                    -rOff.X * 0.3142,
+                    math.noise(0, 1, t * 0.5) * 0.03
+                ))
+                applyC0(ls, CFrame.Angles(
+                    math.sin(t * 1.3 + 0.5) * 0.15 + math.noise(2, 0, t * 0.4) * 0.1 + laOff.X * -0.4887,
+                    0, math.sin(t * 0.9) * 0.08 - 0.2 + laOff.Z * -0.6632))
+                applyC0(rs, CFrame.Angles(
+                    math.sin(t * 1.3 - 0.5) * 0.15 + math.noise(3, 0, t * 0.4) * 0.1 - raOff.X * -0.4887,
+                    0, -math.sin(t * 0.9) * 0.08 + 0.2 - raOff.Z * -0.6632))
+                applyC0(lh, CFrame.Angles(
+                    -0.3 + math.sin(t * 0.7 + 1) * 0.12 + math.noise(4, 0, t * 0.3) * 0.08 + llOff.X * -0.4014,
+                    0, math.sin(t * 0.6) * 0.05 + llOff.Z * -0.5411))
+                applyC0(rh, CFrame.Angles(
+                    -0.3 + math.sin(t * 0.7 - 1) * 0.12 + math.noise(5, 0, t * 0.3) * 0.08 - rlOff.X * -0.4014,
+                    0, -math.sin(t * 0.6) * 0.05 - rlOff.Z * -0.5411))
+                applyC0(neck, CFrame.Angles(
+                    math.sin(t * 0.8) * 0.06, math.sin(t * 0.5) * 0.04,
+                    math.noise(6, 0, t * 0.4) * 0.03))
+            else
+                local rootJoint = hrp:FindFirstChild("RootJoint")
+                if rootJoint then
+                    rootJoint.C0 = CFrame.fromEulerAnglesXYZ(math.pi/2, math.pi, 0)
+                        * CFrame.Angles(-rOff.Z * 0.3665, 0, 0)
+                        * CFrame.Angles(0, -rOff.X * 0.3142, 0)
+                    rootJoint.Transform = CFrame.new(
+                        math.noise(0.5, 0, t * 0.8) * 0.08,
+                        math.noise(0, 0.5, t * 0.6) * 0.12 + math.sin(t * 1.2) * 0.05,
+                        math.noise(0.5, 0.5, t * 0.7) * 0.06
+                    ) * CFrame.Angles(
+                        math.noise(1, 0, t * 0.5) * 0.04, 0,
+                        math.noise(0, 1, t * 0.5) * 0.03)
+                end
+                local lh = torso and torso:FindFirstChild("Left Hip")
+                if lh then
+                    lh.C0 = CFrame.new(-1, -1, 0) * CFrame.Angles(0, -math.pi/2, 0)
+                        * CFrame.Angles(llOff.X * -0.4014, 0, 0)
+                        * CFrame.Angles(0, 0, llOff.Z * -0.5411)
+                    lh.Transform = CFrame.Angles(
+                        -0.3 + math.sin(t * 0.7 + 1) * 0.12 + math.noise(4, 0, t * 0.3) * 0.08,
+                        0, math.sin(t * 0.6) * 0.05)
+                end
+                local rh = torso and torso:FindFirstChild("Right Hip")
+                if rh then
+                    rh.C0 = CFrame.new(1, -1, 0) * CFrame.Angles(0, math.pi/2, 0)
+                        * CFrame.Angles(-rlOff.X * -0.4014, 0, 0)
+                        * CFrame.Angles(0, 0, -rlOff.Z * -0.5411)
+                    rh.Transform = CFrame.Angles(
+                        -0.3 + math.sin(t * 0.7 - 1) * 0.12 + math.noise(5, 0, t * 0.3) * 0.08,
+                        0, -math.sin(t * 0.6) * 0.05)
+                end
+                local ls = torso and torso:FindFirstChild("Left Shoulder")
+                if ls then
+                    ls.C0 = CFrame.new(-1, 0.5, 0) * CFrame.Angles(0, -math.pi/2, 0)
+                        * CFrame.Angles(laOff.X * -0.4887, 0, 0)
+                        * CFrame.Angles(0, 0, laOff.Z * -0.6632)
+                    ls.Transform = CFrame.Angles(
+                        math.sin(t * 1.3 + 0.5) * 0.15 + math.noise(2, 0, t * 0.4) * 0.1,
+                        0, math.sin(t * 0.9) * 0.08 - 0.2)
+                end
+                local rs = torso and torso:FindFirstChild("Right Shoulder")
+                if rs then
+                    rs.C0 = CFrame.new(1, 0.5, 0) * CFrame.Angles(0, math.pi/2, 0)
+                        * CFrame.Angles(-raOff.X * -0.4887, 0, 0)
+                        * CFrame.Angles(0, 0, -raOff.Z * -0.6632)
+                    rs.Transform = CFrame.Angles(
+                        math.sin(t * 1.3 - 0.5) * 0.15 + math.noise(3, 0, t * 0.4) * 0.1,
+                        0, -math.sin(t * 0.9) * 0.08 + 0.2)
+                end
+                local neck = torso and torso:FindFirstChild("Neck")
+                if neck then
+                    neck.Transform = CFrame.Angles(
+                        math.sin(t * 0.8) * 0.06, math.sin(t * 0.5) * 0.04,
+                        math.noise(6, 0, t * 0.4) * 0.03)
+                end
+            end
+        end)
+    end
+
+    function ghostDisable()
+        if not gh_enabled then return end
+        gh_enabled = false
+
+        if gh_floatTrack then
+            pcall(function() gh_floatTrack:Stop(0.3) end)
+            gh_floatTrack = nil
+        end
+        for _, conn in pairs(gh_conns) do
+            pcall(function() conn:Disconnect() end)
+        end
+        gh_conns = {}
+        for _, inst in ipairs(gh_added) do
+            if inst and inst.Parent then pcall(function() inst:Destroy() end) end
+        end
+        gh_added = {}
+        gh_bv, gh_bg = nil, nil
+
+        -- Восстановление свойств по прямым ссылкам
+        for inst, props in pairs(gh_saved) do
+            pcall(function()
+                if inst:IsA("BasePart") then
+                    if props.Color then inst.Color = props.Color end
+                    if props.Material then inst.Material = props.Material end
+                    if props.Transparency ~= nil then inst.Transparency = props.Transparency end
+                    if props.Reflectance ~= nil then inst.Reflectance = props.Reflectance end
+                    if props.CastShadow ~= nil then inst.CastShadow = props.CastShadow end
+                    if props.LocalTransparencyModifier ~= nil then
+                        inst.LocalTransparencyModifier = props.LocalTransparencyModifier
+                    end
+                elseif inst:IsA("Decal") or inst:IsA("Texture") then
+                    if props.Transparency ~= nil then inst.Transparency = props.Transparency end
+                end
+            end)
+        end
+        gh_saved = {}
+
+        local p = ghParts()
+        if p then
+            if p.Humanoid then p.Humanoid.PlatformStand = false end
+            local face = p.Head and (p.Head:FindFirstChild("face") or p.Head:FindFirstChildOfClass("Decal"))
+            if face and gh_savedFace then
+                face.Texture = gh_savedFace
+                face.Transparency = 0
+            end
+            -- Reset joints
+            if p.IsR15 then
+                for joint, baseC0 in pairs(gh_baseC0) do
+                    if joint and joint.Parent then
+                        joint.C0 = baseC0
+                        joint.Transform = CFrame.new()
+                    end
+                end
+            else
+                local rootJoint = p.HRP and p.HRP:FindFirstChild("RootJoint")
+                if rootJoint then
+                    rootJoint.C0 = CFrame.fromEulerAnglesXYZ(math.pi/2, math.pi, 0)
+                    rootJoint.Transform = CFrame.new()
+                end
+                local torso = p.Torso
+                if torso then
+                    local lh = torso:FindFirstChild("Left Hip")
+                    local rh = torso:FindFirstChild("Right Hip")
+                    local ls = torso:FindFirstChild("Left Shoulder")
+                    local rs = torso:FindFirstChild("Right Shoulder")
+                    local nk = torso:FindFirstChild("Neck")
+                    if lh then lh.C0 = CFrame.new(-1,-1,0)*CFrame.Angles(0,-math.pi/2,0); lh.Transform = CFrame.new() end
+                    if rh then rh.C0 = CFrame.new(1,-1,0)*CFrame.Angles(0,math.pi/2,0); rh.Transform = CFrame.new() end
+                    if ls then ls.C0 = CFrame.new(-1,0.5,0)*CFrame.Angles(0,-math.pi/2,0); ls.Transform = CFrame.new() end
+                    if rs then rs.C0 = CFrame.new(1,0.5,0)*CFrame.Angles(0,math.pi/2,0); rs.Transform = CFrame.new() end
+                    if nk then nk.Transform = CFrame.new() end
+                end
+            end
+        end
+        gh_baseC0 = {}
+        gh_savedFace = nil
+
+        for _, s in ipairs({rootSpring, llSpring, rlSpring, laSpring, raSpring}) do
+            s.Position = Vector3.new()
+            s.Velocity = Vector3.new()
+            s.Target = Vector3.new()
+        end
+
+        if ghostActionBtnRef then
+            pcall(function() ghostActionBtnRef.Text = "Ghost" end)
+        end
+    end
+
+    function ghostToggle()
+        if gh_enabled then ghostDisable() else ghostEnable() end
+    end
+
+    function ghostIsActive() return gh_enabled end
+
+    -- Respawn safety
+    pcall(function()
+        player.CharacterAdded:Connect(function()
+            if gh_enabled then
+                task.wait(0.2)
+                ghostDisable()
+            end
+        end)
+    end)
+end
+
+-- Ghost bind listener (та же защита: бинд работает только при включённом ползунке)
+UserInputService.InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if scriptDisabled then return end
+    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+    if ghost_awaitingBind or inv_awaitingBind or esp_awaitingBind then return end
+    if not ghostGetBindEnabled() then return end
+    local bindName = ghostGetBind()
+    if bindName == "" then return end
+    if input.KeyCode.Name == bindName then
+        ghostToggle()
+        if ghostActionBtnRef then
+            pcall(function() ghostActionBtnRef.Text = ghostIsActive() and "Ghost: ON" or "Ghost" end)
+        end
+    end
+end)
 
 ----------------------------------------------------------------
 -- SPECIAL FEATURES MENU (password-protected)
@@ -8572,7 +9464,7 @@ function createEmptySpecialMenu()
         title.Size = UDim2.new(1, -32, 0, 38)
         title.Position = UDim2.new(0, 16, 0, 22)
         title.BackgroundTransparency = 1
-        title.Text = isBackSide and "Special Features (Back)" or "Special Features"
+        title.Text = "Special Features"
         title.TextColor3 = C.WHITE
         title.Font = FONT_BOLD
         title.TextSize = 26
@@ -8595,7 +9487,7 @@ function createEmptySpecialMenu()
 
         -- Spawn Model Section
         local spawnSection = Instance.new("Frame")
-        spawnSection.Size = UDim2.new(1, -32, 0, 100)
+        spawnSection.Size = UDim2.new(1, -32, 0, 140)
         spawnSection.Position = UDim2.new(0, 16, 0, 75)
         spawnSection.BackgroundTransparency = 1
         spawnSection.Parent = root
@@ -8821,6 +9713,111 @@ function createEmptySpecialMenu()
             local newState = not espGetBindEnabled()
             espSetBindEnabled(newState)
             updateEspToggleState(newState)
+        end)
+
+        ----------------------------------------------------------------
+        -- GHOST row (третий ряд): кнопка Ghost | Bind | ползунок вкл/выкл
+        -- Полёт призрака (WASD): Neon-тело, свет, трейлы, spring-анимация.
+        ----------------------------------------------------------------
+        local ghostBtn = Instance.new("TextButton")
+        ghostBtn.Size = UDim2.new(0.52, -4, 0, 30)
+        ghostBtn.Position = UDim2.new(0, 0, 0, 102)
+        ghostBtn.BackgroundColor3 = C.BLACK
+        ghostBtn.BackgroundTransparency = 0.2
+        ghostBtn.Text = ghostIsActive() and "Ghost: ON" or "Ghost"
+        ghostBtn.TextColor3 = C.WHITE
+        ghostBtn.Font = FONT_BOLD
+        ghostBtn.TextSize = 12
+        ghostBtn.AutoButtonColor = false
+        ghostBtn.Parent = spawnSection
+        wmCorner(ghostBtn, 6)
+        wmStroke(ghostBtn, Theme.primary, 1, 0.5)
+        if not isBackSide then
+            ghostActionBtnRef = ghostBtn
+        end
+        ghostBtn.MouseButton1Click:Connect(function()
+            ghostToggle()
+            ghostBtn.Text = ghostIsActive() and "Ghost: ON" or "Ghost"
+        end)
+
+        local ghostBindBtn = Instance.new("TextButton")
+        ghostBindBtn.Size = UDim2.new(0.32, -4, 0, 30)
+        ghostBindBtn.Position = UDim2.new(0.52, 4, 0, 102)
+        ghostBindBtn.BackgroundColor3 = C.BLACK
+        ghostBindBtn.BackgroundTransparency = 0.2
+        ghostBindBtn.Text = ghostBindLabel()
+        ghostBindBtn.TextColor3 = C.WHITE
+        ghostBindBtn.Font = FONT_BOLD
+        ghostBindBtn.TextSize = 12
+        ghostBindBtn.AutoButtonColor = false
+        ghostBindBtn.Parent = spawnSection
+        wmCorner(ghostBindBtn, 6)
+        wmStroke(ghostBindBtn, Theme.primary, 1, 0.5)
+
+        ghostBindBtn.MouseButton1Click:Connect(function()
+            if ghost_awaitingBind then return end
+            ghost_awaitingBind = true
+            ghostBindBtn.Text = "Press key..."
+            task.spawn(function()
+                local capture
+                capture = UserInputService.InputBegan:Connect(function(input, gp)
+                    if input.UserInputType ~= Enum.UserInputType.Keyboard then return end
+                    if input.KeyCode == Enum.KeyCode.Unknown then return end
+                    if input.KeyCode == Enum.KeyCode.Escape then
+                        capture:Disconnect()
+                        ghost_awaitingBind = false
+                        ghostBindBtn.Text = ghostBindLabel()
+                        return
+                    end
+                    local name = input.KeyCode.Name
+                    ghostSetBind(name)
+                    capture:Disconnect()
+                    ghost_awaitingBind = false
+                    ghostBindBtn.Text = "Bind: " .. name
+                end)
+            end)
+        end)
+
+        -- Ползунок Ghost (iOS-style), состояние шифруется как у Dsink v1 (ghostBindEnabledEnc)
+        local ghostToggleBg = Instance.new("TextButton")
+        ghostToggleBg.Size = UDim2.fromOffset(50, 26)
+        ghostToggleBg.Position = UDim2.new(1, -52, 0, 104)
+        ghostToggleBg.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        ghostToggleBg.BackgroundTransparency = 0
+        ghostToggleBg.BorderSizePixel = 0
+        ghostToggleBg.Text = ""
+        ghostToggleBg.AutoButtonColor = false
+        ghostToggleBg.Parent = spawnSection
+        local ghostToggleCorner = Instance.new("UICorner")
+        ghostToggleCorner.CornerRadius = UDim.new(0, 13)
+        ghostToggleCorner.Parent = ghostToggleBg
+
+        local ghostToggleThumb = Instance.new("Frame")
+        ghostToggleThumb.Size = UDim2.fromOffset(22, 22)
+        ghostToggleThumb.Position = UDim2.fromOffset(2, 2)
+        ghostToggleThumb.BackgroundColor3 = Color3.fromRGB(255, 255, 255)
+        ghostToggleThumb.BorderSizePixel = 0
+        ghostToggleThumb.Parent = ghostToggleBg
+        local ghostThumbCorner = Instance.new("UICorner")
+        ghostThumbCorner.CornerRadius = UDim.new(0, 11)
+        ghostThumbCorner.Parent = ghostToggleThumb
+
+        local function updateGhostToggleState(enabled, instant)
+            local t = instant and 0.01 or 0.3
+            if enabled then
+                tween(ghostToggleThumb, t, {Position = UDim2.fromOffset(26, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(ghostToggleBg, t, {BackgroundColor3 = Color3.fromRGB(76, 175, 80)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            else
+                tween(ghostToggleThumb, t, {Position = UDim2.fromOffset(2, 2)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+                tween(ghostToggleBg, t, {BackgroundColor3 = Color3.fromRGB(60, 60, 60)}, Enum.EasingStyle.Quart, Enum.EasingDirection.Out)
+            end
+        end
+        updateGhostToggleState(ghostGetBindEnabled(), true)
+
+        ghostToggleBg.MouseButton1Click:Connect(function()
+            local newState = not ghostGetBindEnabled()
+            ghostSetBindEnabled(newState)
+            updateGhostToggleState(newState)
         end)
 
     end
